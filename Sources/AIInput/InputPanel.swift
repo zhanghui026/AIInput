@@ -159,7 +159,11 @@ final class InputPanel: NSObject {
         translateBtn.target = self
         translateBtn.action = #selector(submit)
         translateBtn.translatesAutoresizingMaskIntoConstraints = false
+        // 只在 Cmd+Return 时触发。不能用裸 "\r"：key equivalent 在事件到达
+        // first responder / 输入法之前分发，裸 Return 会被按钮拦截，导致
+        // 无法输入换行、组词时按回车也无法上屏。
         translateBtn.keyEquivalent = "\r"
+        translateBtn.keyEquivalentModifierMask = [.command]
 
         closeBtn.bezelStyle = .circular
         closeBtn.title = "×"
@@ -284,13 +288,18 @@ extension InputPanel: NSTextViewDelegate {
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        // Cmd+Return 提交。
+        // Cmd+Return 提交。正常情况下翻译按钮的 key equivalent 会先拦截；
+        // 此处兜底（如按钮被禁用时事件落回文本框）。
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            let flags = NSApp.currentEvent?.modifierFlags ?? []
+            let flags = NSApp.currentEvent?.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) ?? []
             if flags.contains(.command) {
                 submit()
                 return true
             }
+            // 普通 Return 交回系统默认处理：组词时由输入法上屏，
+            // 否则插入换行。
+            return false
         }
         // Esc 关闭。
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
