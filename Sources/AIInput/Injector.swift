@@ -15,7 +15,17 @@ final class Injector {
                 into target: InjectionTarget?,
                 completion: @escaping (Bool) -> Void = { _ in }) {
         let pb = NSPasteboard.general
+        let trusted = AccessibilityPermissionManager.shared.isTrusted()
+        Log.flow.notice("inject: AXIsProcessTrusted=\(trusted) target=\(target?.app.bundleIdentifier ?? "nil", privacy: .public) focusedElement=\(target?.focusedElement != nil)")
+        guard trusted else {
+            Log.flow.warning("inject: 未获辅助功能权限，译文仅复制到剪贴板")
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            completion(false)
+            return
+        }
         guard let target = target else {
+            Log.flow.warning("inject: 无目标，译文仅复制到剪贴板")
             pb.clearContents()
             pb.setString(text, forType: .string)
             completion(false)
@@ -34,7 +44,9 @@ final class Injector {
         // 在后台等待原 App 真正成为前台后再发 Cmd+V，避免粘贴到隐藏的面板里。
         let pid = app.processIdentifier
         DispatchQueue.global(qos: .userInitiated).async {
-            guard self.waitUntilFrontmost(pid: pid, timeout: 1.5) else {
+            let front = self.waitUntilFrontmost(pid: pid, timeout: 1.5)
+            Log.flow.notice("inject: 目标置前 ok=\(front)")
+            guard front else {
                 DispatchQueue.main.async {
                     completion(false)
                 }
@@ -44,10 +56,12 @@ final class Injector {
             Thread.sleep(forTimeInterval: 0.12)
             self.restoreFocus(to: target.focusedElement)
             self.postPaste()
+            Log.flow.notice("inject: 已发送 Cmd+V")
             // 等粘贴完成再恢复剪贴板。
             Thread.sleep(forTimeInterval: 0.8)
             DispatchQueue.main.async {
                 saved.restore(to: pb)
+                Log.flow.notice("inject: 剪贴板已恢复")
                 completion(true)
             }
         }
