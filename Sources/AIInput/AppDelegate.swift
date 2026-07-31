@@ -1,6 +1,7 @@
 import Cocoa
 import ApplicationServices
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let accessibilityGuideShownKey = "accessibilityGuideShown.v1"
 

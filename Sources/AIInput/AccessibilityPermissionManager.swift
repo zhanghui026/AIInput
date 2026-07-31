@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 
 /// 辅助功能权限的唯一入口。普通状态查询不会触发系统授权提示。
-final class AccessibilityPermissionManager {
+final class AccessibilityPermissionManager: @unchecked Sendable {
     static let shared = AccessibilityPermissionManager()
 
     private init() {}
@@ -15,7 +15,7 @@ final class AccessibilityPermissionManager {
     @discardableResult
     func requestSystemPrompt() -> Bool {
         let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true
+            "AXTrustedCheckOptionPrompt" as CFString: true
         ] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }

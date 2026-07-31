@@ -1,7 +1,7 @@
 import Foundation
 
 /// Anthropic Messages 兼容客户端，以及文本/网页任务的编排入口。
-final class TranslationService {
+final class TranslationService: @unchecked Sendable {
     enum TranslationError: LocalizedError {
         case notConfigured
         case invalidBaseURL(String)
@@ -66,24 +66,38 @@ final class TranslationService {
 
         var translatedChunks: [String] = []
         translatedChunks.reserveCapacity(chunks.count)
-        for chunk in chunks {
+        var translationWarning: String?
+        for (index, chunk) in chunks.enumerated() {
             try Task.checkCancellation()
             let chunkRequest = TransformationRequest(
                 mode: .webPage,
                 tone: .faithful,
                 text: chunk
             )
-            translatedChunks.append(
-                try await complete(TransformationPromptBuilder.make(for: chunkRequest))
-            )
+            do {
+                translatedChunks.append(
+                    try await complete(TransformationPromptBuilder.make(for: chunkRequest))
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !translatedChunks.isEmpty else { throw error }
+                translationWarning = "正文翻译在第 \(index + 1)/\(chunks.count) 段中断：\(error.localizedDescription)"
+                break
+            }
         }
 
         let summary: String?
-        if request.includeSummary {
-            try Task.checkCancellation()
-            summary = try await complete(
-                TransformationPromptBuilder.makeChineseSummary(for: article.body)
-            )
+        var summaryWarning: String?
+        if request.includeSummary, translationWarning == nil {
+            do {
+                summary = try await summarize(chunks: chunks)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                summary = nil
+                summaryWarning = "摘要生成失败：\(error.localizedDescription)"
+            }
         } else {
             summary = nil
         }
@@ -92,11 +106,37 @@ final class TranslationService {
         if article.wasTruncated {
             sections.append("提示：网页正文过长，已翻译可安全处理的前 160,000 个字符。")
         }
+        if let translationWarning {
+            sections.append("提示：\(translationWarning)；已保留前 \(translatedChunks.count) 段译文。")
+        }
         if let summary {
             sections.append("## 摘要\n\(summary)")
+        } else if let summaryWarning {
+            sections.append("## 摘要\n\(summaryWarning)")
         }
         sections.append("## 正文翻译\n\(translatedChunks.joined(separator: "\n\n"))")
         return sections.joined(separator: "\n\n")
+    }
+
+    private func summarize(chunks: [String]) async throws -> String {
+        var partialSummaries: [String] = []
+        partialSummaries.reserveCapacity(chunks.count)
+        for chunk in chunks {
+            try Task.checkCancellation()
+            partialSummaries.append(
+                try await complete(
+                    TransformationPromptBuilder.makeChineseSummary(for: chunk)
+                )
+            )
+        }
+        guard partialSummaries.count > 1 else {
+            return partialSummaries[0]
+        }
+        return try await complete(
+            TransformationPromptBuilder.makeChineseSummary(
+                for: partialSummaries.joined(separator: "\n\n")
+            )
+        )
     }
 
     private func complete(_ prompt: TransformationPrompt) async throws -> String {

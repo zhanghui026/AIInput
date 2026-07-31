@@ -6,6 +6,6 @@ name = "AIInput"
 script = ""
 
 [[actions]]
-name = "Run"
+name = "Run (local development)"
 icon = "run"
-command = "./script/build_and_run.sh"
+command = "AIINPUT_ALLOW_UNSAFE_ADHOC=1 ./script/build_and_run.sh"

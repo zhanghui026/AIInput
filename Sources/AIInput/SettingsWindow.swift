@@ -1,6 +1,7 @@
 import Cocoa
 
 /// 设置窗口：API Key / Base URL / 模型。
+@MainActor
 final class SettingsWindowController: NSWindowController {
     private let apiKeyField = NSSecureTextField()
     private let baseUrlField = NSTextField()

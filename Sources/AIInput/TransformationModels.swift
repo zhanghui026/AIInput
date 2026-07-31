@@ -66,20 +66,44 @@ struct TransformationRequest: Equatable, Sendable {
 enum LanguageDirectionDetector {
     static func suggestedMode(for text: String) -> TransformMode? {
         var hanCount = 0
-        var latinCount = 0
+        let textWithoutURLs = text.replacingOccurrences(
+            of: #"https?://\S+"#,
+            with: " ",
+            options: [.regularExpression, .caseInsensitive]
+        )
 
-        for scalar in text.unicodeScalars {
+        for scalar in textWithoutURLs.unicodeScalars {
             if isHan(scalar.value) {
                 hanCount += 1
-            } else if isLatin(scalar.value) {
-                latinCount += 1
             }
         }
 
-        guard hanCount > 0 || latinCount > 0, hanCount != latinCount else {
-            return nil
+        let latinWordCount: Int
+        if let regex = try? NSRegularExpression(pattern: #"\p{Latin}+"#) {
+            latinWordCount = regex.numberOfMatches(
+                in: textWithoutURLs,
+                range: NSRange(textWithoutURLs.startIndex..., in: textWithoutURLs)
+            )
+        } else {
+            latinWordCount = 0
         }
-        return hanCount > latinCount ? .zhToEnglish : .englishToChinese
+
+        if hanCount == 0 {
+            return latinWordCount > 0 ? .englishToChinese : nil
+        }
+        if latinWordCount == 0 {
+            return .zhToEnglish
+        }
+
+        // 混排文本只有一方明显占优时才自动提交，避免把技术术语、URL、
+        // 人名等拉丁字符误判成整段英文。
+        if hanCount >= latinWordCount * 4 {
+            return .zhToEnglish
+        }
+        if latinWordCount >= hanCount * 4 {
+            return .englishToChinese
+        }
+        return nil
     }
 
     private static func isHan(_ value: UInt32) -> Bool {
@@ -87,11 +111,5 @@ enum LanguageDirectionDetector {
             || (0x4E00...0x9FFF).contains(value)
             || (0xF900...0xFAFF).contains(value)
             || (0x20000...0x2EBEF).contains(value)
-    }
-
-    private static func isLatin(_ value: UInt32) -> Bool {
-        (0x0041...0x005A).contains(value)
-            || (0x0061...0x007A).contains(value)
-            || (0x00C0...0x024F).contains(value)
     }
 }

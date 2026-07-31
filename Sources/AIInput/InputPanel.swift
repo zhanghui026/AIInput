@@ -3,7 +3,8 @@ import Cocoa
 
 /// 悬浮 AI 文本面板。
 /// 流程：唤起时记录原前台 App/选中文本 → 翻译、润色或分析网页 →
-/// 面板内预览 → 粘贴回原 App 或复制。Esc 关闭（处理中为取消）。
+/// 文本任务直接粘贴；网页或无可编辑目标时预览并复制。Esc 关闭（处理中为取消）。
+@MainActor
 final class InputPanel: NSObject {
     static let shared = InputPanel()
 
@@ -55,11 +56,13 @@ final class InputPanel: NSObject {
     private var lastExternalApp: NSRunningApplication?
     private var stage: Stage = .idle
     private var translationTask: Task<Void, Never>?
+    private var activeRequestID: UUID?
     private var lastSubmittedText = ""
     private var submittedMode: TransformMode = .zhToEnglish
     private var selectionWasCaptured = false
     private var placementSide: PanelPlacement.Side = .below
     private var targetAllowsTextReplacement = true
+    private var panelSessionID = UUID()
 
     private override init() {}
 
@@ -94,6 +97,8 @@ final class InputPanel: NSObject {
 
     func show() {
         if panel == nil { setup() }
+        injector.cancelPendingInjection()
+        panelSessionID = UUID()
 
         // 记录当前前台 App 和它的 focused element 作为注入目标（排除自己）。
         target = resolveTarget()
@@ -187,23 +192,134 @@ final class InputPanel: NSObject {
 
     private func selectedText(from element: AXUIElement?) -> String? {
         guard let element else { return nil }
+        for candidate in elementAndAncestors(startingAt: element) {
+            guard !isSecureTextElement(candidate) else { return nil }
+            if let text = directSelectedText(from: candidate), !text.isEmpty {
+                return text
+            }
+            if let text = textMarkerSelection(from: candidate), !text.isEmpty {
+                return text
+            }
+            if let text = rangeSelection(from: candidate), !text.isEmpty {
+                return text
+            }
+        }
+        return nil
+    }
 
+    private func isSecureTextElement(_ element: AXUIElement) -> Bool {
         var subroleValue: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element,
-                                         kAXSubroleAttribute as CFString,
-                                         &subroleValue) == .success,
-           let subrole = subroleValue as? String,
-           subrole == (kAXSecureTextFieldSubrole as String) {
+        return AXUIElementCopyAttributeValue(
+            element,
+            kAXSubroleAttribute as CFString,
+            &subroleValue
+        ) == .success
+            && (subroleValue as? String) == (kAXSecureTextFieldSubrole as String)
+    }
+
+    private func elementAndAncestors(
+        startingAt element: AXUIElement,
+        maximumDepth: Int = 12
+    ) -> [AXUIElement] {
+        var elements: [AXUIElement] = []
+        var visited: Set<CFHashCode> = []
+        var current: AXUIElement? = element
+        while let candidate = current, elements.count < maximumDepth {
+            let hash = CFHash(candidate)
+            guard visited.insert(hash).inserted else { break }
+            elements.append(candidate)
+
+            var parentValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                candidate,
+                kAXParentAttribute as CFString,
+                &parentValue
+            ) == .success,
+            let parentValue,
+            CFGetTypeID(parentValue) == AXUIElementGetTypeID() else {
+                break
+            }
+            current = (parentValue as! AXUIElement)
+        }
+        return elements
+    }
+
+    private func directSelectedText(from element: AXUIElement) -> String? {
+        var selectedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selectedValue
+        ) == .success,
+        let selectedText = selectedValue as? String else {
+            return nil
+        }
+        return selectedText
+    }
+
+    private func textMarkerSelection(from element: AXUIElement) -> String? {
+        var markerRange: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            "AXSelectedTextMarkerRange" as CFString,
+            &markerRange
+        ) == .success,
+        let markerRange,
+        CFGetTypeID(markerRange) == AXTextMarkerRangeGetTypeID() else {
             return nil
         }
 
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element,
-                                            kAXSelectedTextAttribute as CFString,
-                                            &value) == .success else {
+        var attributedValue: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            "AXAttributedStringForTextMarkerRange" as CFString,
+            markerRange,
+            &attributedValue
+        ) == .success,
+        let attributedValue else {
             return nil
         }
-        return value as? String
+        if let attributedString = attributedValue as? NSAttributedString {
+            return attributedString.string
+        }
+        guard CFGetTypeID(attributedValue) == CFAttributedStringGetTypeID() else {
+            return nil
+        }
+        let attributedString = attributedValue as! CFAttributedString
+        return CFAttributedStringGetString(attributedString) as String
+    }
+
+    private func rangeSelection(from element: AXUIElement) -> String? {
+        // 一些 App 不直接暴露 AXSelectedText，但会提供完整文本和选区范围。
+        var rangeValue: CFTypeRef?
+        var fullValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeValue
+        ) == .success,
+        let rangeValue,
+        CFGetTypeID(rangeValue) == AXValueGetTypeID(),
+        AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &fullValue
+        ) == .success,
+        let fullText = fullValue as? String else {
+            return nil
+        }
+
+        var range = CFRange()
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range),
+              range.location >= 0,
+              range.length > 0 else {
+            return nil
+        }
+        let nsRange = NSRange(location: range.location, length: range.length)
+        guard NSMaxRange(nsRange) <= (fullText as NSString).length else {
+            return nil
+        }
+        return (fullText as NSString).substring(with: nsRange)
     }
 
     private func canReplaceText(in element: AXUIElement?) -> Bool {
@@ -488,7 +604,7 @@ final class InputPanel: NSObject {
         case .polish:
             return "输入要润色的文字"
         case .webPage:
-            return "粘贴英文网页链接（https://…）"
+            return "粘贴英文网页链接"
         }
     }
 
@@ -505,6 +621,7 @@ final class InputPanel: NSObject {
 
     private func resetResultForOptionChange() {
         if stage == .translating {
+            activeRequestID = nil
             translationTask?.cancel()
             translationTask = nil
         }
@@ -669,17 +786,29 @@ final class InputPanel: NSObject {
         Log.flow.notice("submit: 开始 \(self.primaryVerb(for: self.submittedMode), privacy: .public)，\(text.count) 字")
         setStage(.translating)
 
+        let requestID = UUID()
+        activeRequestID = requestID
         translationTask = Task { [weak self] in
             guard let self = self else { return }
             do {
                 let result = try await self.service.perform(request)
                 try Task.checkCancellation()
                 await MainActor.run {
+                    guard self.activeRequestID == requestID,
+                          self.stage == .translating else {
+                        return
+                    }
+                    self.activeRequestID = nil
                     self.translationTask = nil
-                    guard self.stage == .translating else { return }
-                    Log.flow.notice("submit: 处理成功（\(result.count) 字符），进入预览")
+                    Log.flow.notice("submit: 处理成功（\(result.count) 字符）")
                     self.resultTextView.string = result
-                    self.setStage(.preview)
+                    if self.submittedMode != .webPage, self.canPasteResult {
+                        // 直接粘贴时无需先把隐藏前的面板动画放大。
+                        self.stage = .preview
+                        self.pasteResult()
+                    } else {
+                        self.setStage(.preview)
+                    }
                 }
             } catch {
                 if Task.isCancelled {
@@ -687,8 +816,12 @@ final class InputPanel: NSObject {
                     return
                 }
                 await MainActor.run {
+                    guard self.activeRequestID == requestID,
+                          self.stage == .translating else {
+                        return
+                    }
+                    self.activeRequestID = nil
                     self.translationTask = nil
-                    guard self.stage == .translating else { return }
                     Log.flow.error("submit: 翻译失败：\(error.localizedDescription, privacy: .public)")
                     self.setStage(.idle, hint: error.localizedDescription, hintIsError: true)
                 }
@@ -699,18 +832,27 @@ final class InputPanel: NSObject {
     private func pasteResult() {
         let result = resultTextView.string
         guard !result.isEmpty else { return }
+        let injectionSessionID = panelSessionID
         Log.flow.notice("paste: 开始注入")
         hide()
         injector.inject(result, into: target) { [weak self] success in
             Log.flow.notice("paste: 注入完成 success=\(success)")
             if !success {
-                self?.reshowAfterPasteFailure()
+                self?.reshowAfterPasteFailure(
+                    result: result,
+                    sessionID: injectionSessionID
+                )
             }
         }
     }
 
-    private func reshowAfterPasteFailure() {
-        guard let panel = panel else { return }
+    private func reshowAfterPasteFailure(result: String, sessionID: UUID) {
+        guard panelSessionID == sessionID,
+              panel?.isVisible != true,
+              let panel else {
+            return
+        }
+        resultTextView.string = result
         setStage(.preview, hint: "未能自动粘贴：译文已保留，可 ⇧⌘C 复制", hintIsError: true)
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
@@ -728,6 +870,7 @@ final class InputPanel: NSObject {
 
     private func cancelTranslationIfNeeded() {
         guard stage == .translating else { return }
+        activeRequestID = nil
         translationTask?.cancel()
         translationTask = nil
         Log.flow.notice("submit: 取消进行中的翻译")

@@ -5,7 +5,7 @@ import Foundation
 /// 注意：通过 Finder 双击启动的 GUI App 拿不到 shell 环境变量，故推荐把 key
 /// 写入 ~/.aiinput/key（见 README 的安装步骤），App 启动时读取该文件。
 enum Config {
-    private static let defaults = UserDefaults.standard
+    private static var defaults: UserDefaults { .standard }
 
     private enum Keys {
         static let apiKey = "apiKey"

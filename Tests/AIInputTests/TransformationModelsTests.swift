@@ -11,6 +11,18 @@ final class TransformationModelsTests: XCTestCase {
             LanguageDirectionDetector.suggestedMode(for: "Please confirm tomorrow's meeting time."),
             .englishToChinese
         )
+        XCTAssertEqual(
+            LanguageDirectionDetector.suggestedMode(
+                for: "请查看 https://example.com/docs 并确认内容是否正确。"
+            ),
+            .zhToEnglish
+        )
+        XCTAssertNil(
+            LanguageDirectionDetector.suggestedMode(for: "请 review this PR")
+        )
+        XCTAssertNil(
+            LanguageDirectionDetector.suggestedMode(for: "请检查 build_run_sim 是否成功")
+        )
         XCTAssertNil(LanguageDirectionDetector.suggestedMode(for: "12345!?"))
     }
 

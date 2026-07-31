@@ -25,20 +25,18 @@ case "${1:-}" in
         ;;
 esac
 
-find_signing_identity() {
-    if [ -n "${AIINPUT_SIGN_IDENTITY:-}" ]; then
-        printf '%s\n' "$AIINPUT_SIGN_IDENTITY"
-        return
-    fi
-
-    /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
-        | /usr/bin/sed -nE 's/^[[:space:]]*[0-9]+\) ([[:xdigit:]]{40}) .*/\1/p' \
-        | /usr/bin/sed -n '1p'
-}
-
-SIGN_IDENTITY="$(find_signing_identity)"
+SIGN_IDENTITY="${AIINPUT_SIGN_IDENTITY:-}"
+ALLOW_UNSAFE_ADHOC="${AIINPUT_ALLOW_UNSAFE_ADHOC:-0}"
 if [ "$SIGN_IDENTITY" = "-" ]; then
     SIGN_IDENTITY=""
+    ALLOW_UNSAFE_ADHOC=1
+fi
+if [ -z "$SIGN_IDENTITY" ] && [ "$ALLOW_UNSAFE_ADHOC" != "1" ]; then
+    echo "错误: 未设置固定的代码签名身份，已停止构建。" >&2
+    echo "请设置 AIINPUT_SIGN_IDENTITY 为证书 SHA-1；可用以下命令查看:" >&2
+    echo "  security find-identity -v -p codesigning" >&2
+    echo "仅限本机开发时，可明确设置 AIINPUT_ALLOW_UNSAFE_ADHOC=1。" >&2
+    exit 1
 fi
 
 ADHOC_DESIGNATED_REQUIREMENT="designated => identifier \"$BUNDLE_ID\" and info[$DEVELOPMENT_MARKER_KEY] = \"$DEVELOPMENT_MARKER_VALUE\""
@@ -102,9 +100,9 @@ PLIST
             --sign "$SIGN_IDENTITY" \
             "$APP_BUNDLE"
     else
-        echo "警告: 未找到代码签名身份，使用仅限本机开发的稳定 ad-hoc requirement。" >&2
+        echo "警告: 已明确启用仅限本机开发的稳定 ad-hoc requirement。" >&2
         echo "警告: 此 requirement 没有证书锚点，可被同机恶意程序仿冒；请勿用于分发。" >&2
-        echo "提示: 设置 AIINPUT_SIGN_IDENTITY 可改用钥匙串中的正式代码签名身份。" >&2
+        echo "提示: 设置固定的 AIINPUT_SIGN_IDENTITY 可改用安全的证书身份。" >&2
         /usr/bin/codesign --force \
             --identifier "$BUNDLE_ID" \
             --requirements "=$ADHOC_DESIGNATED_REQUIREMENT" \
