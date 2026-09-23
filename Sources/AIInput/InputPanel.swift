@@ -71,6 +71,25 @@ final class InputPanel: NSObject {
     private var targetAllowsTextReplacement = true
     private var panelSessionID = UUID()
     private var retainedAt: Date?
+    private var captureScope: CaptureScope = .none
+    private var accessibilityTrusted = true
+    private var captureTask: Task<Void, Never>?
+    /// 上次看过剪贴板时的 changeCount；之后有变化＝用户新复制了内容。
+    private var seenClipboardChangeCount = NSPasteboard.general.changeCount
+
+    /// 原文的来源，决定唤起后是否自动开始，以及粘贴时的提示。
+    private enum CaptureScope {
+        case none        // 手动输入：粘贴到光标处
+        case selection   // 选中文字：自动开始，粘贴替换选区
+        case clipboard   // 剪贴板文字：粘贴到光标处
+    }
+
+    private struct Capture {
+        let text: String
+        let scope: CaptureScope
+        /// 选中文字，或上次唤起后新复制到剪贴板的内容。
+        let isFresh: Bool
+    }
 
     private override init() {}
 
@@ -106,6 +125,11 @@ final class InputPanel: NSObject {
             || !inputTextView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// App 启动时调用：此前已在剪贴板里的内容不算“新复制”，不会被自动处理。
+    func recordClipboardBaseline() {
+        seenClipboardChangeCount = NSPasteboard.general.changeCount
+    }
+
     func rememberPotentialTarget(_ app: NSRunningApplication?) {
         guard let app = app, isExternalTarget(app) else { return }
         lastExternalApp = app
@@ -123,6 +147,7 @@ final class InputPanel: NSObject {
         if panel == nil { setup() }
         injector.cancelPendingInjection()
         panelSessionID = UUID()
+        let sessionID = panelSessionID
 
         // 记录当前前台 App 和它的 focused element 作为注入目标（排除自己）。
         target = resolveTarget()
@@ -131,18 +156,60 @@ final class InputPanel: NSObject {
         } else {
             Log.flow.warning("show: 未解析到注入目标")
         }
+        accessibilityTrusted = AccessibilityPermissionManager.shared.isTrusted()
         targetAllowsTextReplacement = SelectionReader.canReplaceText(in: target?.focusedElement)
 
-        let selection = SelectionReader.selectedText(from: target?.focusedElement)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
+        // 读取选区可能要向目标 App 发 ⌘C，必须在面板成为 key window 之前完成。
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            let capture = await self.captureInput()
+            guard self.panelSessionID == sessionID, !Task.isCancelled else { return }
+            self.captureTask = nil
+            self.present(with: capture)
+        }
+    }
+
+    // MARK: - 读取原文：选中文字 → 剪贴板
+
+    private func captureInput() async -> Capture? {
+        let pb = NSPasteboard.general
+        let clipboardIsFresh = pb.changeCount != seenClipboardChangeCount
+        defer { seenClipboardChangeCount = pb.changeCount }
+
+        if accessibilityTrusted, let target {
+            let state = SelectionReader.selectionState(in: target.focusedElement)
+            Log.flow.notice("capture: 选区状态 \(String(describing: state), privacy: .private)")
+            switch state {
+            case .text(let text):
+                Log.flow.notice("capture: 辅助功能读到选中文字（\(text.count) 字）")
+                return Capture(text: text, scope: .selection, isFresh: true)
+            case .none:
+                break
+            case .unknown:
+                if let copied = await SelectionCopier.copySelection() {
+                    return Capture(text: copied, scope: .selection, isFresh: true)
+                }
+            }
+        }
+
+        guard let text = ClipboardReader.text(from: pb) else {
+            Log.flow.notice("capture: 没有选中文字，剪贴板也没有可用文字")
+            return nil
+        }
+        Log.flow.notice("capture: 使用剪贴板（\(text.count) 字，新内容=\(clipboardIsFresh)）")
+        return Capture(text: text, scope: .clipboard, isFresh: clipboardIsFresh)
+    }
+
+    private func present(with capture: Capture?) {
         let retainedRecently = retainedAt.map {
             Date().timeIntervalSince($0) < Self.retentionInterval
         } ?? false
         retainedAt = nil
 
-        if selection == nil, retainedRecently, hasSessionContent {
-            // 恢复上次点外面隐藏时的现场；进行中的请求会继续出字。
+        // 新选中或新复制的内容开启新一轮；否则优先恢复上次点外面隐藏时的现场。
+        let startsNewSession = capture?.isFresh ?? false
+        if !startsNewSession, retainedRecently, hasSessionContent {
             Log.flow.notice("show: 恢复上次现场")
             setStage(stage)
             placeNearCursor()
@@ -151,23 +218,30 @@ final class InputPanel: NSObject {
         }
 
         cancelRunningRequest()
-        selectionWasCaptured = selection != nil
-        inputTextView.string = selection ?? ""
         setResult("")
-        if let selection, selectedPanelMode == .webPage, !ModeResolver.isSingleURL(selection) {
-            // 划的是普通文字：本次按翻译处理，不改用户保存的偏好。
+        captureScope = capture?.scope ?? .none
+        selectionWasCaptured = capture != nil
+        inputTextView.string = capture?.text ?? ""
+        if let capture, selectedPanelMode == .webPage, !ModeResolver.isSingleURL(capture.text) {
+            // 带进来的是普通文字：本次按翻译处理，不改用户保存的偏好。
             selectPanelMode(.translate)
         }
         refreshModeControls()
         updatePlaceholderVisibility()
         setStage(.idle)
-
         placeNearCursor()
         presentPanel(focus: inputTextView)
-        if selection != nil {
+
+        guard let capture else { return }
+        if capture.isFresh {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                 guard let self, self.panel?.isVisible == true, self.stage == .idle else { return }
                 self.startTransformation()
+            }
+        } else {
+            // 旧的剪贴板内容只预填并全选：想处理就 ⌘⏎，想输入新内容直接打字覆盖。
+            DispatchQueue.main.async { [weak self] in
+                self?.inputTextView.selectAll(nil)
             }
         }
     }
@@ -503,7 +577,7 @@ final class InputPanel: NSObject {
     private func placeholder(for mode: PanelMode) -> String {
         switch mode {
         case .translate:
-            return "输入中文或英文，自动识别方向；也可先在其他 App 选中文字"
+            return "输入中文或英文，自动识别方向；也可先选中或复制文字再唤起"
         case .polish:
             return "输入要润色的文字"
         case .webPage:
@@ -552,7 +626,9 @@ final class InputPanel: NSObject {
             if isWebResult {
                 actionBtn.title = "复制全文"
             } else {
-                actionBtn.title = canPasteResult ? "粘贴" : "复制"
+                actionBtn.title = canPasteResult
+                    ? (captureScope == .selection ? "替换" : "粘贴")
+                    : "复制"
             }
             actionBtn.isEnabled = true
             spinner.stopAnimation(nil)
@@ -577,7 +653,10 @@ final class InputPanel: NSObject {
             }
             var parts: [String] = []
             if selectionWasCaptured {
-                parts.append("已读取选中文本")
+                parts.append(captureScope == .clipboard ? "来自剪贴板" : "已读取选中文字")
+            }
+            if !accessibilityTrusted {
+                parts.append("未授予辅助功能权限：只能用剪贴板，结果需手动粘贴（菜单栏图标 → 授予）")
             }
             if selectedPanelMode == .translate {
                 let inputIsEmpty = inputTextView.string
@@ -601,9 +680,10 @@ final class InputPanel: NSObject {
             if submittedMode == .webPage {
                 return "⌘⏎ 复制全文 · ⌘R 重新分析 · 可滚动查看"
             }
+            let verb = captureScope == .selection ? "替换「\(targetName ?? "目标")」中的选中文字" : nil
             let paste = canPasteResult
-                ? targetName.map { "⌘⏎ 粘贴到「\($0)」" } ?? "⌘⏎ 粘贴"
-                : "⌘⏎ 复制"
+                ? verb.map { "⌘⏎ \($0)" } ?? targetName.map { "⌘⏎ 粘贴到「\($0)」" } ?? "⌘⏎ 粘贴"
+                : accessibilityTrusted ? "⌘⏎ 复制" : "⌘⏎ 复制（未授予辅助功能权限，无法自动粘贴）"
             return "\(paste) · ⌘R 重来 · 结果可直接修改"
         case .failed:
             return "⌘⏎ 重试 · 修改原文或选项后再试 · Esc 关闭"
@@ -703,7 +783,10 @@ final class InputPanel: NSObject {
     }
 
     private var canPasteResult: Bool {
-        submittedMode != .webPage && target != nil && targetAllowsTextReplacement
+        submittedMode != .webPage
+            && accessibilityTrusted
+            && target != nil
+            && targetAllowsTextReplacement
     }
 
     private func startTransformation() {
@@ -801,6 +884,8 @@ final class InputPanel: NSObject {
         finishSession()
         injector.inject(result, into: target) { [weak self] success in
             Log.flow.notice("paste: 注入完成 success=\(success)")
+            // 注入会改写/恢复剪贴板，这不是用户新复制的内容。
+            self?.seenClipboardChangeCount = NSPasteboard.general.changeCount
             if !success {
                 self?.reshowAfterPasteFailure(
                     result: result,
@@ -828,6 +913,7 @@ final class InputPanel: NSObject {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(result, forType: .string)
+        seenClipboardChangeCount = pb.changeCount
         Log.flow.notice("copy: 结果已复制")
         finishSession()
     }
@@ -855,6 +941,10 @@ extension InputPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard (notification.object as? NSTextView) === inputTextView else { return }
         selectionWasCaptured = false
+        if inputTextView.string.isEmpty {
+            // 清空后重新输入的内容与带进来的原文无关。
+            captureScope = .none
+        }
         updatePlaceholderVisibility()
         // 修改原文使旧结果/进行中的请求失效。
         switch stage {
