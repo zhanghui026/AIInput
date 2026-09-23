@@ -8,7 +8,8 @@ macOS 菜单栏 AI 写作助手：在任意 App 中按 `Ctrl+Option+Cmd+E`，即
 - 三种模式：翻译（自动识别中↔英，也可固定方向）、同语言润色、网页；输入框里只有一个链接时自动走网页流程。
 - 11 种写作语气：忠实、简洁、专业、自然（去 AI 味）、友好、正式、口语、直接、自信/说服、学术、客观（去人称）。出结果后切换语气会立即重写。模式、方向、语气会被记住。
 - 结果流式输出，默认先预览：结果区可直接修改，`⌘⏎` 粘贴回原 App，`⌘R` 重新生成。设置里可改为“直接粘贴”。
-- 在其他 App 选中文本后唤起会自动开始处理，结果同样先预览，不会未经确认覆盖选区。
+- 原文来源：先取当前 App 的选中文字（读不到时模拟一次 `⌘C` 并立即恢复剪贴板，Electron/网页同样适用），确认后 `⌘⏎` 替换选区；没有选区时用剪贴板里的文字——上次唤起后新复制的会自动开始处理，旧内容只预填并全选。密码管理器标记为敏感的剪贴板内容不会读取。结果都先预览，不会未经确认覆盖。
+- 未授予辅助功能权限时仍可用剪贴板工作：复制原文 → 唤起 → `⌘⏎` 复制结果，再手动粘贴。
 - 设置里的「个人要求 / 术语表」会注入每次请求，例如固定术语译法、拼写习惯。
 - 限流/过载（429、5xx、529）和瞬时网络错误在出字前自动重试；错误以可读文字显示在结果区。
 - 点击面板外只是隐藏：10 分钟内再次唤起会恢复原文、结果和进行中的请求；`Esc` 才会取消并清空。
@@ -72,6 +73,8 @@ AIINPUT_SIGN_IDENTITY="<证书 SHA-1>" ./script/package_dmg.sh
    - **API Key**：留空即用 `~/.aiinput/key`；也可在此手填，会同步写回文件。
 5. 在 Notes / Safari / VS Code / 任意输入框里按 `Ctrl+⌥+⌘+E`，输入内容后按 `Cmd+Return`。结果流式出现在预览区，确认后再按 `Cmd+Return` 粘贴；`⌘R` 重来，`⇧⌘C` 复制。
 
+**首次运行（包括从 DMG 安装到「应用程序」后）需要授权一次辅助功能**；之后用同一方式重新构建不会丢失授权。未授权时面板底栏会提示，此时只能用剪贴板作为原文、结果需手动粘贴。同一时间只会保留最新启动的一个 AIInput 实例。
+
 如果从旧的未正确签名版本升级，需在辅助功能列表中移除旧 `AIInput` 条目、运行新版并授权一次。此后始终使用同一 `AIINPUT_SIGN_IDENTITY`，重新构建不应重复索权。本地 ad-hoc 模式的 requirement 也保持稳定，但不具备证书身份的安全性。
 
 > 接口走 Anthropic Messages 格式：`POST {baseUrl}/messages`，请求头 `x-api-key` + `anthropic-version: 2023-06-01`，body 用 `system` + `messages`。
@@ -100,6 +103,7 @@ AIINPUT_SIGN_IDENTITY="<证书 SHA-1>" ./script/package_dmg.sh
 - 网页抓取会拒绝本机、局域网、链路本地地址和不安全重定向，复验实际连接地址，并在流式下载超过 5 MiB 时停止。
 - 本机开发用 ad-hoc requirement 只解决身份稳定，不提供正式分发的证书信任或防冒用能力，必须显式启用。
 - 模型可能把原文中“看起来像指令”的句子省略而不是翻译（不会执行它）。
+- 没有选区时，少数 App 的 `⌘C` 会复制整行（如 VS Code），此时会把当前行当作选中文字。
 - 快捷键 v1 固定为 `Ctrl+⌥+⌘+E`，设置页预留改键扩展。
 - API Key 文件 `~/.aiinput/key` 仅当前用户可读（600），但仍是明文，请勿提交到版本库。
 
@@ -110,7 +114,8 @@ Sources/AIInput/
 ├── main.swift              # 入口
 ├── AppDelegate.swift       # 菜单栏 status item、权限引导、注册热键
 ├── AccessibilityPermissionManager.swift
-├── SelectionReader.swift   # 辅助功能读取焦点元素与选中文本
+├── SelectionReader.swift   # 辅助功能读取焦点元素与选区状态
+├── Clipboard.swift         # 剪贴板快照/读取、⌘C 取选中文字
 ├── HotkeyManager.swift     # Carbon 全局热键
 ├── InputPanel.swift        # Liquid Glass 悬浮 NSPanel + NSTextView
 ├── PanelPlacement.swift    # 多显示器可见区域定位

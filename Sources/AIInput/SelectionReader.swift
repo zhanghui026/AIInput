@@ -1,26 +1,89 @@
 import ApplicationServices
 import Cocoa
 
-/// 通过辅助功能 API 读取目标 App 的焦点元素、选中文本，并判断能否替换文本。
+/// 通过辅助功能 API 读取目标 App 的焦点元素、选区状态，并判断能否替换文本。
 enum SelectionReader {
+    private static let textRoles: Set<String> = [
+        kAXTextFieldRole as String,
+        kAXTextAreaRole as String,
+        kAXComboBoxRole as String,
+    ]
+
+    /// 目标 App 自己的焦点元素。按 App 查询而不是系统级查询：
+    /// 面板成为 key window 之后仍能拿到原 App 里的输入框。
     static func focusedElement(for app: NSRunningApplication) -> AXUIElement? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(systemWide,
-                                            kAXFocusedUIElementAttribute as CFString,
-                                            &value) == .success,
-              let focused = value,
-              CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            return nil
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        if let element = elementAttribute(kAXFocusedUIElementAttribute, of: appElement) {
+            return element
         }
 
-        let element = focused as! AXUIElement
+        guard let element = elementAttribute(
+            kAXFocusedUIElementAttribute,
+            of: AXUIElementCreateSystemWide()
+        ) else {
+            return nil
+        }
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success,
               pid == app.processIdentifier else {
             return nil
         }
         return element
+    }
+
+    enum SelectionState: Equatable {
+        case text(String)  // 读到了选中文字
+        case none          // 能确定没有选区（原生输入框、光标只是一个点）
+        case unknown       // 读不到（Electron/网页等），需要用 ⌘C 探测
+    }
+
+    /// 通过辅助功能判断选区；读不准时返回 `.unknown`，由调用方改用 ⌘C。
+    static func selectionState(in element: AXUIElement?) -> SelectionState {
+        guard let element else { return .unknown }
+        if isSecureTextElement(element) { return .none }
+        if let text = selectedText(from: element)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return .text(text)
+        }
+        guard isTextInput(element) else { return .unknown }
+        var rangeValue: CFTypeRef?
+        var range = CFRange()
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeValue
+        ) == .success,
+        let rangeValue,
+        CFGetTypeID(rangeValue) == AXValueGetTypeID(),
+        AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
+            return .unknown
+        }
+        return range.length == 0 ? .none : .unknown
+    }
+
+    /// 焦点是否在可输入文字的控件里（而不是网页文档、列表等）。
+    static func isTextInput(_ element: AXUIElement?) -> Bool {
+        guard let element, !isSecureTextElement(element) else { return false }
+        return role(of: element).map(textRoles.contains) ?? false
+    }
+
+    private static func elementAttribute(_ attribute: String, of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return (value as! AXUIElement)
+    }
+
+    private static func role(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value) == .success else {
+            return nil
+        }
+        return value as? String
     }
 
     static func selectedText(from element: AXUIElement?) -> String? {
@@ -157,6 +220,9 @@ enum SelectionReader {
 
     static func canReplaceText(in element: AXUIElement?) -> Bool {
         guard let element else { return true }
+        if isTextInput(element) {
+            return true
+        }
         var settable = DarwinBoolean(false)
         if AXUIElementIsAttributeSettable(
             element,
@@ -165,18 +231,6 @@ enum SelectionReader {
         ) == .success {
             return settable.boolValue
         }
-
-        var roleValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXRoleAttribute as CFString,
-            &roleValue
-        ) == .success,
-        let role = roleValue as? String else {
-            return true
-        }
-        return role == (kAXTextFieldRole as String)
-            || role == (kAXTextAreaRole as String)
-            || role == (kAXComboBoxRole as String)
+        return role(of: element) == nil
     }
 }

@@ -13,10 +13,10 @@ struct InjectionTarget {
 final class Injector {
     private var injectionTask: Task<Void, Never>?
     private var injectionID: UUID?
-    private var pendingSnapshot: Snapshot?
+    private var pendingSnapshot: PasteboardSnapshot?
     private var injectedPasteboardChangeCount: Int?
 
-    /// 向 `target` 注入 `text`。
+    /// 向 `target` 注入 `text`。目标里若仍有选区，粘贴即替换选区。
     func inject(_ text: String,
                 into target: InjectionTarget?,
                 completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
@@ -40,7 +40,7 @@ final class Injector {
         }
         let app = target.app
 
-        let saved = Snapshot.capture(from: pb)
+        let saved = PasteboardSnapshot.capture(from: pb)
 
         pb.clearContents()
         pb.setString(text, forType: .string)
@@ -71,7 +71,7 @@ final class Injector {
                 try await Task.sleep(nanoseconds: 120_000_000)
                 guard self.injectionID == currentInjectionID else { return }
                 self.restoreFocus(to: target.focusedElement)
-                self.postPaste()
+                KeyboardEvents.postCommand(KeyboardEvents.keyCodeV)
                 Log.flow.notice("inject: 已发送 Cmd+V")
 
                 // 仅当剪贴板仍是本次注入值时恢复，避免覆盖用户刚复制的新内容。
@@ -140,48 +140,5 @@ final class Injector {
         guard let element = element else { return }
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-    }
-
-    private func postPaste() {
-        let source = CGEventSource(stateID: .hidSystemState)
-        // virtualKey 9 = 'V'。
-        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-        cmdDown?.flags = CGEventFlags.maskCommand
-        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        cmdUp?.flags = CGEventFlags.maskCommand
-        cmdDown?.post(tap: .cgSessionEventTap)
-        cmdUp?.post(tap: .cgSessionEventTap)
-    }
-}
-
-/// 剪贴板快照，用于粘贴后恢复。尽力恢复所有类型；不可读的类型会跳过。
-private struct Snapshot {
-    let items: [[(NSPasteboard.PasteboardType, Data)]]
-
-    static func capture(from pb: NSPasteboard) -> Snapshot {
-        var collected: [[(NSPasteboard.PasteboardType, Data)]] = []
-        for item in pb.pasteboardItems ?? [] {
-            var pairs: [(NSPasteboard.PasteboardType, Data)] = []
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    pairs.append((type, data))
-                }
-            }
-            collected.append(pairs)
-        }
-        return Snapshot(items: collected)
-    }
-
-    func restore(to pb: NSPasteboard) {
-        pb.clearContents()
-        guard !items.isEmpty else { return }
-        let restored: [NSPasteboardItem] = items.map { pairs in
-            let item = NSPasteboardItem()
-            for (type, data) in pairs {
-                item.setData(data, forType: type)
-            }
-            return item
-        }
-        pb.writeObjects(restored)
     }
 }

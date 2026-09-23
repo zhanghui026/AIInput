@@ -53,10 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                           selector: #selector(activeAppChanged(_:)),
                                                           name: NSWorkspace.didActivateApplicationNotification,
                                                           object: nil)
+        InputPanel.shared.recordClipboardBaseline()
         HotkeyManager.shared.onTrigger = { [weak self] in self?.trigger() }
-        if !HotkeyManager.shared.register() {
-            promptHotkeyFailure()
-        }
+        let replacedOtherInstance = terminateOtherInstances()
+        registerHotkey(retriesLeft: replacedOtherInstance ? 10 : 0)
 
         // 辅助功能仅用于读取输入焦点和自动粘贴；状态查询不会触发系统提示。
         let isTrusted = refreshAccessibilityStatus()
@@ -152,6 +152,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         accessibilityPermission.openSystemSettings()
         refreshAccessibilityStatus()
+    }
+
+    /// 只保留最新启动的实例：同时运行多个时热键会唤起多个面板、互相抢焦点。
+    private func terminateOtherInstances() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let current = NSRunningApplication.current.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != current }
+        for app in others {
+            Log.flow.notice("launch: 退出旧实例 pid=\(app.processIdentifier) \(app.bundleURL?.path ?? "?", privacy: .public)")
+            app.terminate()
+        }
+        return !others.isEmpty
+    }
+
+    /// 旧实例退出、释放热键需要一点时间，注册失败时短暂重试。
+    private func registerHotkey(retriesLeft: Int) {
+        if HotkeyManager.shared.register() { return }
+        guard retriesLeft > 0 else {
+            promptHotkeyFailure()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.registerHotkey(retriesLeft: retriesLeft - 1)
+        }
     }
 
     private func promptHotkeyFailure() {
