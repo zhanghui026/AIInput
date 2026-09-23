@@ -78,4 +78,15 @@ enum Config {
     static var isConfigured: Bool {
         !apiKey.isEmpty && !model.isEmpty
     }
+
+    static var service: ServiceConfig {
+        ServiceConfig(apiKey: apiKey, baseURL: baseUrl, model: model)
+    }
+}
+
+/// 单次请求使用的模型服务配置快照。
+struct ServiceConfig: Sendable, Equatable {
+    let apiKey: String
+    let baseURL: String
+    let model: String
 }

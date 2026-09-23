@@ -36,15 +36,16 @@ final class TranslationServiceTests: XCTestCase {
     }
 
     func testResponseParserRejectsNonSuccessStatus() throws {
-        let body = Data(#"{"error":"bad request"}"#.utf8)
+        let body = Data(#"{"type":"error","error":{"type":"rate_limit_error","message":"bad request"}}"#.utf8)
 
         XCTAssertThrowsError(
             try TranslationService.parseResponse(data: body, statusCode: 429)
         ) { error in
-            guard case TranslationService.TranslationError.badStatus(let code, _) = error else {
+            guard case TranslationService.TranslationError.badStatus(let code, let message, _) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 429)
+            XCTAssertEqual(message, "bad request")
         }
     }
 
