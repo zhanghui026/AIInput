@@ -35,11 +35,13 @@ struct PanelView: View {
 
     @ObservedObject var model: PanelModel
     @ObservedObject var toneBoard: ToneBoard
+    @ObservedObject var history: HistoryStore
     let actions: PanelActions
 
     init(model: PanelModel, actions: PanelActions) {
         self.model = model
         self.toneBoard = model.toneBoard
+        self.history = model.history
         self.actions = actions
     }
 
@@ -58,11 +60,15 @@ struct PanelView: View {
         model.viewMode == .tones
     }
 
+    private var inHistory: Bool {
+        model.viewMode == .history
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             content
-            if !inToneView {
+            if model.viewMode == .single {
                 if refining, model.stage == .preview {
                     refineRow
                 } else {
@@ -79,6 +85,14 @@ struct PanelView: View {
         .padding(.bottom, 16)
         .frame(width: Self.width, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
+        .background(
+            // ⌘Y 在任何状态下都能打开 / 关闭历史。
+            Button("", action: model.toggleHistory)
+                .keyboardShortcut("y", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+        )
         .onChange(of: model.stage) { stage in
             if stage == .running {
                 editingSource = false
@@ -92,24 +106,39 @@ struct PanelView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: originIcon)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-            Text(originLabel)
-                .font(Typography.ui(12))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-            if model.panelMode == .translate {
-                directionMenu
-            }
-            Spacer(minLength: 8)
-            if model.versions.count > 1, !inToneView {
-                versionStepper
+            if inHistory {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text(history.entries.isEmpty ? "最近使用" : "最近使用 · \(history.entries.count) 条")
+                    .font(Typography.ui(12))
+                    .foregroundColor(.secondary)
+                Spacer(minLength: 8)
+            } else {
+                sourceHeader
             }
             if model.panelMode == .translate {
                 viewSwitch
             }
             modeToggle
+        }
+    }
+
+    @ViewBuilder
+    private var sourceHeader: some View {
+        Image(systemName: originIcon)
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+        Text(originLabel)
+            .font(Typography.ui(12))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+        if model.panelMode == .translate {
+            directionMenu
+        }
+        Spacer(minLength: 8)
+        if model.versions.count > 1, !inToneView {
+            versionStepper
         }
     }
 
@@ -237,7 +266,17 @@ struct PanelView: View {
 
     @ViewBuilder
     private var content: some View {
-        if inToneView {
+        if inHistory {
+            HistoryView(
+                history: history,
+                selectedIndex: model.historyIndex,
+                select: model.selectHistory,
+                load: { index in
+                    model.selectHistory(index: index)
+                    model.loadHistorySelection()
+                }
+            )
+        } else if inToneView {
             VStack(alignment: .leading, spacing: 12) {
                 sourceQuote
                 ToneBoardView(board: toneBoard)
@@ -485,7 +524,14 @@ struct PanelView: View {
                     .lineLimit(1)
                     .help("在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 AIInput")
             }
-            if inToneView {
+            if inHistory {
+                Text("↑↓ 选择")
+                    .font(Typography.ui(12))
+                    .foregroundColor(.secondary)
+                HintButton(key: "⏎", title: "载入", action: model.loadHistorySelection)
+                HintButton(key: "⌘Y", title: "返回", action: model.toggleHistory)
+                HintButton(key: "esc", title: "关闭", action: actions.close)
+            } else if inToneView {
                 Text("⌘1–4 选中")
                     .font(Typography.ui(12))
                     .foregroundColor(.secondary)
@@ -502,6 +548,7 @@ struct PanelView: View {
         HStack(spacing: 12) {
             switch model.stage {
             case .idle:
+                HintButton(key: "⌘Y", title: "历史", action: model.toggleHistory)
                 HintButton(key: "esc", title: "关闭", action: actions.close)
             case .running:
                 HintButton(key: "esc", title: "取消", action: actions.close)
@@ -522,6 +569,12 @@ struct PanelView: View {
     }
 
     private var primaryTitle: String {
+        if inHistory {
+            guard model.selectedHistoryEntry != nil else { return "暂无历史" }
+            guard model.target.canPaste else { return "复制" }
+            if model.origin == .selection { return "替换选区" }
+            return model.target.appName.map { "粘贴到 \($0)" } ?? "粘贴"
+        }
         if inToneView {
             guard let chosen = toneBoard.chosen, toneBoard.chosenText != nil else { return "等待结果" }
             let name = "「\(chosen.chipName)」"

@@ -199,6 +199,7 @@ final class InMemoryPreferences: PanelPreferences {
     var tone: WritingTone = .faithful
     var favoriteTones: [WritingTone] = Config.defaultFavoriteTones
     var customInstructions = ""
+    var historyEnabled = true
 }
 
 final class FakeTransformer: TextTransforming, @unchecked Sendable {

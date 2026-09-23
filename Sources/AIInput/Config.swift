@@ -18,6 +18,7 @@ enum Config {
         static let customInstructions = "customInstructions"
         static let favoriteTones = "favoriteTones"
         static let pinnedPanelOrigins = "pinnedPanelOrigins"
+        static let historyEnabled = "historyEnabled"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -132,6 +133,12 @@ enum Config {
 
     static func clearPinnedPanelOrigins() {
         defaults.removeObject(forKey: Keys.pinnedPanelOrigins)
+    }
+
+    /// 是否记录用过的结果（⌘Y 历史）。
+    static var historyEnabled: Bool {
+        get { defaults.object(forKey: Keys.historyEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.historyEnabled) }
     }
 
     /// 个人要求 / 术语表，追加到每次请求的系统提示。

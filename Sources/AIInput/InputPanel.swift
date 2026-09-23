@@ -15,7 +15,11 @@ final class InputPanel: NSObject {
 
     private var panel: KeyablePanel?
     private var hostingView: SizeReportingHostingView?
-    private let model = PanelModel(transformer: TranslationService(), preferences: ConfigPreferences())
+    private let model = PanelModel(
+        transformer: TranslationService(),
+        preferences: ConfigPreferences(),
+        history: HistoryStore()
+    )
     private let injector = Injector()
     private weak var sourceEditor: NSTextView?
 
@@ -242,12 +246,23 @@ final class InputPanel: NSObject {
         panel.delegate = self
         panel.onEscape = { [weak self] in self?.close() }
         panel.onTab = { [weak self] in self?.model.toggleMode() }
+        // 历史列表里的 ↑↓ / ⏎（焦点不在文本框时才会到这里）。
+        panel.onListKey = { [weak self] key in
+            guard let self, self.model.viewMode == .history else { return false }
+            switch key {
+            case .up: self.model.moveHistorySelection(offset: -1)
+            case .down: self.model.moveHistorySelection(offset: 1)
+            case .enter: self.model.loadHistorySelection()
+            }
+            return true
+        }
         self.panel = panel
 
         let actions = PanelActions(
             primary: { [weak self] in self?.performPrimaryAction() },
             copy: { [weak self] in
                 guard let self, self.model.stage == .preview else { return }
+                self.model.noteUsed(self.model.resultText)
                 self.copy(self.model.resultText)
             },
             close: { [weak self] in self?.close() },
@@ -361,8 +376,10 @@ final class InputPanel: NSObject {
         case .submit:
             model.submit()
         case .paste(let text):
+            model.noteUsed(text)
             paste(text)
         case .copy(let text):
+            model.noteUsed(text)
             copy(text)
         }
     }
@@ -445,8 +462,16 @@ private final class SizeReportingHostingView: NSHostingView<PanelView> {
 /// 键盘焦点、中文输入法不激活。这里重写为 true。焦点不在文本框时，
 /// Esc / ⇥ 由面板兜底处理。
 private final class KeyablePanel: NSPanel {
+    enum ListKey {
+        case up
+        case down
+        case enter
+    }
+
     var onEscape: (() -> Void)?
     var onTab: (() -> Void)?
+    /// 返回 true 表示已处理。
+    var onListKey: ((ListKey) -> Bool)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -456,9 +481,21 @@ private final class KeyablePanel: NSPanel {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 48, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
-            onTab?()
-            return
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers.isEmpty {
+            switch event.keyCode {
+            case 48:
+                onTab?()
+                return
+            case 126 where onListKey?(.up) == true:
+                return
+            case 125 where onListKey?(.down) == true:
+                return
+            case 36 where onListKey?(.enter) == true, 76 where onListKey?(.enter) == true:
+                return
+            default:
+                break
+            }
         }
         super.keyDown(with: event)
     }

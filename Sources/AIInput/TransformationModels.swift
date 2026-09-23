@@ -1,6 +1,6 @@
 import Foundation
 
-enum TransformMode: String, CaseIterable, Sendable {
+enum TransformMode: String, CaseIterable, Sendable, Codable {
     case zhToEnglish
     case englishToChinese
     case polish
@@ -59,7 +59,7 @@ enum ModeResolver {
     }
 }
 
-enum WritingTone: String, CaseIterable, Sendable {
+enum WritingTone: String, CaseIterable, Sendable, Codable {
     case faithful
     case concise
     case professional

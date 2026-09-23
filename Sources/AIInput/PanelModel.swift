@@ -16,6 +16,7 @@ protocol PanelPreferences: AnyObject {
     var tone: WritingTone { get set }
     var favoriteTones: [WritingTone] { get }
     var customInstructions: String { get }
+    var historyEnabled: Bool { get }
 }
 
 @MainActor
@@ -34,6 +35,7 @@ final class ConfigPreferences: PanelPreferences {
     }
     var favoriteTones: [WritingTone] { Config.favoriteTones }
     var customInstructions: String { Config.customInstructions }
+    var historyEnabled: Bool { Config.historyEnabled }
 }
 
 /// 面板的全部状态与操作，不依赖 AppKit，便于单测。
@@ -71,6 +73,7 @@ final class PanelModel: ObservableObject {
     enum ViewMode: Equatable {
         case single
         case tones
+        case history
     }
 
     enum PrimaryAction: Equatable {
@@ -91,6 +94,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var streamingText = ""
     @Published private(set) var submittedMode: TransformMode?
     @Published private(set) var viewMode: ViewMode = .single
+    @Published private(set) var historyIndex = 0
+    let history: HistoryStore
     /// 润色结果是否标出修订痕迹（⌘D 切换）。
     @Published private(set) var showsRevisions = true
     let toneBoard: ToneBoard
@@ -109,9 +114,12 @@ final class PanelModel: ObservableObject {
     private var task: Task<Void, Never>?
     private var requestID: UUID?
 
-    init(transformer: TextTransforming, preferences: PanelPreferences) {
+    init(transformer: TextTransforming,
+         preferences: PanelPreferences,
+         history: HistoryStore? = nil) {
         self.transformer = transformer
         self.preferences = preferences
+        self.history = history ?? HistoryStore(fileURL: nil)
         toneBoard = ToneBoard(transformer: transformer, preferences: preferences)
         panelMode = preferences.panelMode
         direction = preferences.direction
@@ -245,7 +253,7 @@ final class PanelModel: ObservableObject {
     /// 打开或关闭多语气视图；关闭时把选中的那张卡片作为新版本带回单个视图。
     func toggleToneView() {
         switch viewMode {
-        case .single:
+        case .single, .history:
             guard canShowToneView else { return }
             viewMode = .tones
             openToneBoard()
@@ -254,6 +262,68 @@ final class PanelModel: ObservableObject {
             toneBoard.cancelRunning()
             viewMode = .single
         }
+    }
+
+    // MARK: - 历史（⌘Y）
+
+    func toggleHistory() {
+        if viewMode == .history {
+            viewMode = .single
+            return
+        }
+        if viewMode == .tones {
+            toneBoard.cancelRunning()
+        }
+        historyIndex = 0
+        viewMode = .history
+    }
+
+    func moveHistorySelection(offset: Int) {
+        guard !history.entries.isEmpty else { return }
+        historyIndex = min(max(historyIndex + offset, 0), history.entries.count - 1)
+    }
+
+    func selectHistory(index: Int) {
+        guard history.entries.indices.contains(index) else { return }
+        historyIndex = index
+    }
+
+    var selectedHistoryEntry: HistoryEntry? {
+        history.entries.indices.contains(historyIndex) ? history.entries[historyIndex] : nil
+    }
+
+    /// 把选中的历史载入单个视图：原文 + 结果，可以继续换语气、微调或直接粘贴。
+    func loadHistorySelection() {
+        guard let entry = selectedHistoryEntry else { return }
+        cancelRequest()
+        toneBoard.reset()
+        sourceText = entry.source
+        versions = [Version(text: entry.result, mode: entry.mode, tone: entry.tone)]
+        versionIndex = 0
+        submittedMode = entry.mode
+        stage = .preview
+        viewMode = .single
+    }
+
+    /// 结果被粘贴、替换或复制时调用，记入历史。
+    func noteUsed(_ text: String) {
+        guard preferences.historyEnabled else { return }
+        let mode: TransformMode
+        let usedTone: WritingTone
+        switch viewMode {
+        case .history:
+            guard let entry = selectedHistoryEntry else { return }
+            history.record(source: entry.source, result: text, mode: entry.mode,
+                           tone: entry.tone, appName: target.appName)
+            return
+        case .tones:
+            mode = resolvedMode
+            usedTone = toneBoard.chosen ?? tone
+        case .single:
+            mode = currentVersion?.mode ?? submittedMode ?? resolvedMode
+            usedTone = currentVersion?.tone ?? tone
+        }
+        history.record(source: sourceText, result: text, mode: mode, tone: usedTone, appName: target.appName)
     }
 
     private func openToneBoard() {
@@ -389,6 +459,10 @@ final class PanelModel: ObservableObject {
     // MARK: - 主按钮 ⌘⏎
 
     func primaryAction() -> PrimaryAction {
+        if viewMode == .history {
+            guard let text = selectedHistoryEntry?.result else { return .none }
+            return target.canPaste ? .paste(text) : .copy(text)
+        }
         if viewMode == .tones {
             guard let text = toneBoard.chosenText else { return .none }
             return target.canPaste ? .paste(text) : .copy(text)
