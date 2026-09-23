@@ -16,6 +16,7 @@ enum Config {
         static let tone = "writingTone"
         static let autoPaste = "autoPaste"
         static let customInstructions = "customInstructions"
+        static let favoriteTones = "favoriteTones"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -101,6 +102,18 @@ enum Config {
     static var autoPaste: Bool {
         get { defaults.bool(forKey: Keys.autoPaste) }
         set { defaults.set(newValue, forKey: Keys.autoPaste) }
+    }
+
+    static let defaultFavoriteTones: [WritingTone] = [.faithful, .concise, .professional, .natural, .friendly]
+
+    /// 面板上直接显示的常用语气（⌘1–⌘5），其余放在「更多」里。
+    static var favoriteTones: [WritingTone] {
+        get {
+            let stored = (defaults.stringArray(forKey: Keys.favoriteTones) ?? [])
+                .compactMap(WritingTone.init)
+            return stored.isEmpty ? defaultFavoriteTones : Array(stored.prefix(5))
+        }
+        set { defaults.set(newValue.prefix(5).map(\.rawValue), forKey: Keys.favoriteTones) }
     }
 
     /// 个人要求 / 术语表，追加到每次请求的系统提示。
