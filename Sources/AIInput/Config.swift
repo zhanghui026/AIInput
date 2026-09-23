@@ -5,12 +5,18 @@ import Foundation
 /// 注意：通过 Finder 双击启动的 GUI App 拿不到 shell 环境变量，故推荐把 key
 /// 写入 ~/.aiinput/key（见 README 的安装步骤），App 启动时读取该文件。
 enum Config {
-    private static let defaults = UserDefaults.standard
+    private static var defaults: UserDefaults { .standard }
 
     private enum Keys {
         static let apiKey = "apiKey"
         static let baseUrl = "baseUrl"
         static let model = "model"
+        static let panelMode = "panelMode"
+        static let direction = "translationDirection"
+        static let tone = "writingTone"
+        static let includeSummary = "includeSummary"
+        static let autoPaste = "autoPaste"
+        static let customInstructions = "customInstructions"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -75,7 +81,52 @@ enum Config {
         set { defaults.set(newValue, forKey: Keys.model) }
     }
 
+    // MARK: - 面板偏好（重启后保留）
+
+    static var panelMode: PanelMode {
+        get { defaults.string(forKey: Keys.panelMode).flatMap(PanelMode.init) ?? .translate }
+        set { defaults.set(newValue.rawValue, forKey: Keys.panelMode) }
+    }
+
+    static var direction: TranslationDirection {
+        get { defaults.string(forKey: Keys.direction).flatMap(TranslationDirection.init) ?? .auto }
+        set { defaults.set(newValue.rawValue, forKey: Keys.direction) }
+    }
+
+    static var tone: WritingTone {
+        get { defaults.string(forKey: Keys.tone).flatMap(WritingTone.init) ?? .faithful }
+        set { defaults.set(newValue.rawValue, forKey: Keys.tone) }
+    }
+
+    static var includeSummary: Bool {
+        get { defaults.object(forKey: Keys.includeSummary) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.includeSummary) }
+    }
+
+    /// 文本任务完成后跳过预览、直接粘贴（旧行为）。默认关闭：先预览再粘贴。
+    static var autoPaste: Bool {
+        get { defaults.bool(forKey: Keys.autoPaste) }
+        set { defaults.set(newValue, forKey: Keys.autoPaste) }
+    }
+
+    /// 个人要求 / 术语表，追加到每次请求的系统提示。
+    static var customInstructions: String {
+        get { defaults.string(forKey: Keys.customInstructions) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.customInstructions) }
+    }
+
     static var isConfigured: Bool {
         !apiKey.isEmpty && !model.isEmpty
     }
+
+    static var service: ServiceConfig {
+        ServiceConfig(apiKey: apiKey, baseURL: baseUrl, model: model)
+    }
+}
+
+/// 单次请求使用的模型服务配置快照。
+struct ServiceConfig: Sendable, Equatable {
+    let apiKey: String
+    let baseURL: String
+    let model: String
 }

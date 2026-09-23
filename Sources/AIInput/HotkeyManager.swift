@@ -2,7 +2,7 @@ import Carbon.HIToolbox
 import Cocoa
 
 /// 全局热键管理。用 Carbon RegisterEventHotKey 注册 Ctrl+Option+Cmd+E。
-final class HotkeyManager {
+final class HotkeyManager: @unchecked Sendable {
     static let shared = HotkeyManager()
 
     private var hotKeyRef: EventHotKeyRef?

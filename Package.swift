@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "AIInput",
             path: "Sources/AIInput"
-        )
+        ),
+        .testTarget(
+            name: "AIInputTests",
+            dependencies: ["AIInput"],
+            path: "Tests/AIInputTests"
+        ),
     ]
 )
