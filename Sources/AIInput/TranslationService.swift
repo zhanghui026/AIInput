@@ -182,7 +182,8 @@ final class TranslationService: @unchecked Sendable {
             throw TranslationError.decode
         }
         Log.flow.notice("request: HTTP \(http.statusCode)")
-        return try Self.parseResponse(data: data, statusCode: http.statusCode)
+        let text = try Self.parseResponse(data: data, statusCode: http.statusCode)
+        return Self.clean(text, source: prompt.sourceText)
     }
 
     static func parseResponse(data: Data, statusCode: Int) throws -> String {
@@ -202,10 +203,11 @@ final class TranslationService: @unchecked Sendable {
             guard block["type"] as? String == "text" else { return nil }
             return block["text"] as? String
         }.joined()
-        guard !text.isEmpty else {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             throw TranslationError.decode
         }
-        return clean(text)
+        return trimmed
     }
 
     private func messagesURL(from rawBaseURL: String) throws -> URL {
@@ -234,14 +236,31 @@ final class TranslationService: @unchecked Sendable {
         return base.appendingPathComponent("messages")
     }
 
-    private static func clean(_ value: String) -> String {
-        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        while text.first == "\"" || text.first == "\u{201C}" || text.first == "\u{2018}" {
-            text.removeFirst()
+    private static let quotePairs: [(open: Character, close: Character)] = [
+        ("\"", "\""),
+        ("\u{201C}", "\u{201D}"),
+        ("\u{2018}", "\u{2019}"),
+        ("\u{300C}", "\u{300D}"),
+    ]
+
+    /// 模型偶尔会把整段结果包一层引号。仅当整段恰好被一对引号包裹、内部不再
+    /// 出现同种引号、且原文本身不以引号开头时剥掉这一层；其余引号都属于内容。
+    static func clean(_ value: String, source: String?) -> String {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 2,
+              let first = text.first,
+              let last = text.last,
+              let pair = quotePairs.first(where: { $0.open == first && $0.close == last }) else {
+            return text
         }
-        while text.last == "\"" || text.last == "\u{201D}" || text.last == "\u{2019}" {
-            text.removeLast()
+        if let sourceFirst = source?.trimmingCharacters(in: .whitespacesAndNewlines).first,
+           quotePairs.contains(where: { $0.open == sourceFirst }) {
+            return text
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inner = text.dropFirst().dropLast()
+        guard !inner.contains(pair.open), !inner.contains(pair.close) else {
+            return text
+        }
+        return inner.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

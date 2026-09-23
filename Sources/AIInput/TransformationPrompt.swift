@@ -5,6 +5,8 @@ struct TransformationPrompt: Equatable, Sendable {
     let user: String
     let maxTokens: Int
     let timeout: TimeInterval
+    /// 原文，用于判断结果首尾引号是否属于内容本身。
+    let sourceText: String
 }
 
 enum TransformationPromptBuilder {
@@ -39,7 +41,8 @@ enum TransformationPromptBuilder {
             system: system,
             user: try encodePayload(request.text),
             maxTokens: outputTokenBudget(for: request),
-            timeout: request.mode == .webPage ? 60 : 45
+            timeout: request.mode == .webPage ? 60 : 45,
+            sourceText: request.text
         )
     }
 
@@ -54,7 +57,8 @@ enum TransformationPromptBuilder {
             system: system,
             user: try encodePayload(text),
             maxTokens: 1_200,
-            timeout: 60
+            timeout: 60,
+            sourceText: text
         )
     }
 
