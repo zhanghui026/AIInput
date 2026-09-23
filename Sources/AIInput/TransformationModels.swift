@@ -89,6 +89,18 @@ enum WritingTone: String, CaseIterable, Sendable {
     }
 }
 
+extension WritingTone {
+    /// 面板 chip 上的短名。
+    var chipName: String {
+        switch self {
+        case .natural: return "自然"
+        case .confident: return "自信"
+        case .objective: return "客观"
+        default: return displayName
+        }
+    }
+}
+
 struct TransformationRequest: Equatable, Sendable {
     let mode: TransformMode
     let tone: WritingTone

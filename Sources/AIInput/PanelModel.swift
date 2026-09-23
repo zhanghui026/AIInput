@@ -85,6 +85,9 @@ final class PanelModel: ObservableObject {
     @Published private(set) var streamingText = ""
     @Published private(set) var submittedMode: TransformMode?
     @Published var target = Target()
+    /// 底栏的临时提示（例如“未能自动粘贴”），开始新一轮或新请求时清除。
+    @Published var notice: String?
+    private(set) var lastSubmittedText = ""
 
     /// 结果就绪时通知外壳（用于“直接粘贴”设置）。
     var onResultReady: ((String) -> Void)?
@@ -140,6 +143,7 @@ final class PanelModel: ObservableObject {
     /// 开始新一轮：载入带进来的原文（或清空），丢弃旧结果。
     func load(text: String, origin: Origin) {
         cancelRequest()
+        notice = nil
         sourceText = text
         self.origin = text.isEmpty ? .typed : origin
         versions = []
@@ -161,6 +165,14 @@ final class PanelModel: ObservableObject {
             versionIndex = 0
             stage = .idle
         }
+    }
+
+    /// 原文为空时 ↑：恢复上次提交的原文。
+    @discardableResult
+    func restoreLastSource() -> Bool {
+        guard stage == .idle, sourceText.isEmpty, !lastSubmittedText.isEmpty else { return false }
+        sourceText = lastSubmittedText
+        return true
     }
 
     /// 用户直接修改结果：改的是当前版本，粘贴时用修改后的文字。
@@ -219,6 +231,7 @@ final class PanelModel: ObservableObject {
         let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         cancelRequest()
+        lastSubmittedText = text
 
         let mode = resolvedMode
         submittedMode = mode
@@ -228,6 +241,7 @@ final class PanelModel: ObservableObject {
             text: text,
             customInstructions: preferences.customInstructions
         )
+        notice = nil
         let id = UUID()
         requestID = id
         streamingText = ""
