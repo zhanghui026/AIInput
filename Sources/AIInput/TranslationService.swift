@@ -48,182 +48,23 @@ final class TranslationService: @unchecked Sendable {
     ]
 
     private let session: URLSession
-    private let webPageService: WebPageService
     private let config: @Sendable () -> ServiceConfig
     private let retryDelays: [TimeInterval]
 
     init(session: URLSession = .shared,
-         webPageService: WebPageService? = nil,
          config: @escaping @Sendable () -> ServiceConfig = { Config.service },
          retryDelays: [TimeInterval] = TranslationService.defaultRetryDelays) {
         self.session = session
-        self.webPageService = webPageService ?? WebPageService(session: session)
         self.config = config
         self.retryDelays = retryDelays
     }
 
-    /// 保留旧调用入口，行为等价于“忠实中译英”。
-    func translate(_ chinese: String) async throws -> String {
-        try await perform(
-            TransformationRequest(
-                mode: .zhToEnglish,
-                tone: .faithful,
-                text: chinese
-            )
-        )
-    }
-
-    /// 执行一次转换。文本任务流式返回，`onPartial` 随每个增量收到累计文本；
-    /// 网页任务在每段译完后回报进度文档。返回值为清洗后的最终结果。
+    /// 执行一次转换并流式返回：`onPartial` 随每个增量收到累计文本，
+    /// 返回值为清洗后的最终结果。
     func perform(_ request: TransformationRequest,
                  onPartial: PartialHandler? = nil) async throws -> String {
         try Task.checkCancellation()
-        switch request.mode {
-        case .zhToEnglish, .englishToChinese, .polish:
-            return try await stream(TransformationPromptBuilder.make(for: request), onPartial: onPartial)
-        case .webPage:
-            return try await translateWebPage(request, onPartial: onPartial)
-        }
-    }
-
-    private func translateWebPage(_ request: TransformationRequest,
-                                  onPartial: PartialHandler?) async throws -> String {
-        let article = try await webPageService.fetchArticle(from: request.text)
-        let chunks = WebPageService.chunk(text: article.body)
-        guard !chunks.isEmpty else {
-            throw WebPageService.WebPageError.noArticleContent
-        }
-
-        var translatedChunks: [String] = []
-        translatedChunks.reserveCapacity(chunks.count)
-        var translationWarning: String?
-        for (index, chunk) in chunks.enumerated() {
-            try Task.checkCancellation()
-            if let onPartial {
-                let progress = Self.webDocument(
-                    article: article,
-                    notes: ["正在翻译第 \(index + 1)/\(chunks.count) 段…"],
-                    summarySection: nil,
-                    translatedChunks: translatedChunks
-                )
-                await onPartial(progress)
-            }
-            let chunkRequest = TransformationRequest(
-                mode: .webPage,
-                tone: .faithful,
-                text: chunk,
-                customInstructions: request.customInstructions
-            )
-            do {
-                translatedChunks.append(
-                    try await complete(TransformationPromptBuilder.make(for: chunkRequest))
-                )
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                guard !translatedChunks.isEmpty else { throw error }
-                translationWarning = "正文翻译在第 \(index + 1)/\(chunks.count) 段中断：\(error.localizedDescription)"
-                break
-            }
-        }
-
-        let summary: String?
-        var summaryWarning: String?
-        if request.includeSummary, translationWarning == nil {
-            if let onPartial {
-                await onPartial(Self.webDocument(
-                    article: article,
-                    notes: ["正在生成摘要…"],
-                    summarySection: nil,
-                    translatedChunks: translatedChunks
-                ))
-            }
-            do {
-                summary = try await summarize(chunks: chunks)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                summary = nil
-                summaryWarning = "摘要生成失败：\(error.localizedDescription)"
-            }
-        } else {
-            summary = nil
-        }
-
-        var notes: [String] = []
-        if let translationWarning {
-            notes.append("\(translationWarning)；已保留前 \(translatedChunks.count) 段译文。")
-        }
-        let summarySection = summary ?? summaryWarning
-        return Self.webDocument(
-            article: article,
-            notes: notes,
-            summarySection: summarySection,
-            translatedChunks: translatedChunks
-        )
-    }
-
-    private static func webDocument(article: WebArticle,
-                                    notes: [String],
-                                    summarySection: String?,
-                                    translatedChunks: [String]) -> String {
-        var sections = ["# \(article.title)", "来源：\(article.sourceURL.absoluteString)"]
-        if article.wasTruncated {
-            sections.append("提示：网页正文过长，已翻译可安全处理的前 160,000 个字符。")
-        }
-        sections.append(contentsOf: notes.map { "提示：\($0)" })
-        if let summarySection {
-            sections.append("## 摘要\n\(summarySection)")
-        }
-        if !translatedChunks.isEmpty {
-            sections.append("## 正文翻译\n\(translatedChunks.joined(separator: "\n\n"))")
-        }
-        return sections.joined(separator: "\n\n")
-    }
-
-    private func summarize(chunks: [String]) async throws -> String {
-        var partialSummaries: [String] = []
-        partialSummaries.reserveCapacity(chunks.count)
-        for chunk in chunks {
-            try Task.checkCancellation()
-            partialSummaries.append(
-                try await complete(
-                    TransformationPromptBuilder.makeChineseSummary(for: chunk)
-                )
-            )
-        }
-        guard partialSummaries.count > 1 else {
-            return partialSummaries[0]
-        }
-        return try await complete(
-            TransformationPromptBuilder.makeChineseSummary(
-                for: partialSummaries.joined(separator: "\n\n")
-            )
-        )
-    }
-
-    private func complete(_ prompt: TransformationPrompt) async throws -> String {
-        try await withRetry { _ in
-            let request = try self.makeRequest(for: prompt, stream: false)
-            let data: Data
-            let response: URLResponse
-            do {
-                (data, response) = try await self.session.data(for: request)
-            } catch {
-                throw Self.mapTransportError(error)
-            }
-            try Task.checkCancellation()
-            guard let http = response as? HTTPURLResponse else {
-                throw TranslationError.decode
-            }
-            Log.flow.notice("request: HTTP \(http.statusCode)")
-            let text = try Self.parseResponse(
-                data: data,
-                statusCode: http.statusCode,
-                retryAfter: Self.retryAfter(from: http)
-            )
-            return Self.clean(text, source: prompt.sourceText)
-        }
+        return try await stream(TransformationPromptBuilder.make(for: request), onPartial: onPartial)
     }
 
     private func stream(_ prompt: TransformationPrompt,
@@ -401,35 +242,6 @@ final class TranslationService: @unchecked Sendable {
         let text = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return String(text.prefix(200))
-    }
-
-    static func parseResponse(data: Data,
-                              statusCode: Int,
-                              retryAfter: TimeInterval? = nil) throws -> String {
-        guard (200...299).contains(statusCode) else {
-            throw TranslationError.badStatus(
-                statusCode,
-                serviceMessage(from: data),
-                retryAfter: retryAfter
-            )
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]] else {
-            throw TranslationError.decode
-        }
-        if json["stop_reason"] as? String == "max_tokens" {
-            throw TranslationError.outputTruncated
-        }
-
-        let text = content.compactMap { block -> String? in
-            guard block["type"] as? String == "text" else { return nil }
-            return block["text"] as? String
-        }.joined()
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TranslationError.decode
-        }
-        return trimmed
     }
 
     private func messagesURL(from rawBaseURL: String) throws -> URL {

@@ -14,7 +14,6 @@ enum Config {
         static let panelMode = "panelMode"
         static let direction = "translationDirection"
         static let tone = "writingTone"
-        static let includeSummary = "includeSummary"
         static let autoPaste = "autoPaste"
         static let customInstructions = "customInstructions"
     }
@@ -96,11 +95,6 @@ enum Config {
     static var tone: WritingTone {
         get { defaults.string(forKey: Keys.tone).flatMap(WritingTone.init) ?? .faithful }
         set { defaults.set(newValue.rawValue, forKey: Keys.tone) }
-    }
-
-    static var includeSummary: Bool {
-        get { defaults.object(forKey: Keys.includeSummary) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Keys.includeSummary) }
     }
 
     /// 文本任务完成后跳过预览、直接粘贴（旧行为）。默认关闭：先预览再粘贴。

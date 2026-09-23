@@ -22,16 +22,14 @@ final class InputPanel: NSObject {
         static let headerHeight: CGFloat = 30
         static let inputHeight: CGFloat = 112
         static let resultHeight: CGFloat = 210
-        static let webResultHeight: CGFloat = 330
         static let gap: CGFloat = 12
         static let barHeight: CGFloat = 32
         static let cornerRadius: CGFloat = 24
         static var idleHeight: CGFloat {
             pad + headerHeight + gap + inputHeight + gap + barHeight + pad
         }
-        static func previewHeight(for mode: TransformMode) -> CGFloat {
-            let result = mode == .webPage ? webResultHeight : resultHeight
-            return idleHeight + gap + result
+        static var previewHeight: CGFloat {
+            idleHeight + gap + resultHeight
         }
     }
 
@@ -42,7 +40,6 @@ final class InputPanel: NSObject {
     private let modeControl = NSSegmentedControl()
     private let directionPopUp = NSPopUpButton()
     private let tonePopUp = NSPopUpButton()
-    private let summaryCheck = NSButton()
     private let inputTextView = NSTextView()
     private let inputScroll = NSScrollView()
     private let resultTextView = NSTextView()
@@ -222,10 +219,6 @@ final class InputPanel: NSObject {
         captureScope = capture?.scope ?? .none
         selectionWasCaptured = capture != nil
         inputTextView.string = capture?.text ?? ""
-        if let capture, selectedPanelMode == .webPage, !ModeResolver.isSingleURL(capture.text) {
-            // 带进来的是普通文字：本次按翻译处理，不改用户保存的偏好。
-            selectPanelMode(.translate)
-        }
         refreshModeControls()
         updatePlaceholderVisibility()
         setStage(.idle)
@@ -364,14 +357,7 @@ final class InputPanel: NSObject {
         tonePopUp.toolTip = "选择译文或润色结果的写作语气；出结果后切换会立即重写"
         tonePopUp.setAccessibilityLabel("写作语气")
 
-        summaryCheck.title = "包含摘要"
-        summaryCheck.setButtonType(.switch)
-        summaryCheck.state = Config.includeSummary ? .on : .off
-        summaryCheck.target = self
-        summaryCheck.action = #selector(summarySettingChanged)
-        summaryCheck.setAccessibilityLabel("包含中文摘要")
-
-        let header = NSStackView(views: [modeControl, directionPopUp, tonePopUp, summaryCheck])
+        let header = NSStackView(views: [modeControl, directionPopUp, tonePopUp])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 10
@@ -539,38 +525,20 @@ final class InputPanel: NSObject {
         optionsChanged()
     }
 
-    @objc private func summarySettingChanged() {
-        Config.includeSummary = summaryCheck.state == .on
-        optionsChanged()
-    }
-
-    /// 已有结果时改选项＝按新选项重写；网页任务耗时长，只作废旧结果不自动重跑。
+    /// 已有结果时改选项＝按新选项重写。
     private func optionsChanged() {
         refreshModeControls()
         switch stage {
         case .idle:
             setStage(.idle)
         case .running, .preview, .failed:
-            if resolvedMode == .webPage || submittedMode == .webPage {
-                cancelRunningRequest()
-                setResult("")
-                setStage(.idle)
-            } else {
-                startTransformation()
-            }
+            startTransformation()
         }
-    }
-
-    private func selectPanelMode(_ mode: PanelMode) {
-        guard let index = PanelMode.allCases.firstIndex(of: mode) else { return }
-        modeControl.selectedSegment = index
     }
 
     private func refreshModeControls() {
         let mode = selectedPanelMode
         directionPopUp.isHidden = mode != .translate
-        tonePopUp.isHidden = mode == .webPage
-        summaryCheck.isHidden = mode != .webPage
         placeholderLabel.stringValue = placeholder(for: mode)
     }
 
@@ -580,8 +548,6 @@ final class InputPanel: NSObject {
             return "输入中文或英文，自动识别方向；也可先选中或复制文字再唤起"
         case .polish:
             return "输入要润色的文字"
-        case .webPage:
-            return "粘贴英文网页链接"
         }
     }
 
@@ -591,8 +557,6 @@ final class InputPanel: NSObject {
             return "翻译"
         case .polish:
             return "润色"
-        case .webPage:
-            return "分析"
         }
     }
 
@@ -600,7 +564,7 @@ final class InputPanel: NSObject {
         switch mode {
         case .zhToEnglish: return "中→英"
         case .englishToChinese: return "英→中"
-        case .polish, .webPage: return nil
+        case .polish: return nil
         }
     }
 
@@ -608,8 +572,7 @@ final class InputPanel: NSObject {
 
     private func setStage(_ s: Stage, hint: String? = nil, hintIsError: Bool = false) {
         stage = s
-        let isWebResult = submittedMode == .webPage
-        copyBtn.isHidden = s != .preview || isWebResult
+        copyBtn.isHidden = s != .preview
         regenerateBtn.isHidden = s != .preview
         resultTextView.isEditable = s == .preview
 
@@ -623,13 +586,9 @@ final class InputPanel: NSObject {
             actionBtn.isEnabled = false
             spinner.startAnimation(nil)
         case .preview:
-            if isWebResult {
-                actionBtn.title = "复制全文"
-            } else {
-                actionBtn.title = canPasteResult
-                    ? (captureScope == .selection ? "替换" : "粘贴")
-                    : "复制"
-            }
+            actionBtn.title = canPasteResult
+                ? (captureScope == .selection ? "替换" : "粘贴")
+                : "复制"
             actionBtn.isEnabled = true
             spinner.stopAnimation(nil)
         case .failed:
@@ -648,9 +607,6 @@ final class InputPanel: NSObject {
         switch s {
         case .idle:
             let mode = resolvedMode
-            if mode == .webPage {
-                return "⌘⏎ 分析网页 · 支持无需登录的静态文章页 · Esc 关闭"
-            }
             var parts: [String] = []
             if selectionWasCaptured {
                 parts.append(captureScope == .clipboard ? "来自剪贴板" : "已读取选中文字")
@@ -671,15 +627,9 @@ final class InputPanel: NSObject {
             parts.append(targetName.map { "目标：\($0)" } ?? "未检测到目标输入框")
             return parts.joined(separator: " · ")
         case .running:
-            if submittedMode == .webPage {
-                return "正在提取并翻译网页… Esc 取消"
-            }
             let label = directionLabel(for: submittedMode).map { "\($0) " } ?? ""
             return "\(label)\(primaryVerb(for: submittedMode))中… Esc 取消"
         case .preview:
-            if submittedMode == .webPage {
-                return "⌘⏎ 复制全文 · ⌘R 重新分析 · 可滚动查看"
-            }
             let verb = captureScope == .selection ? "替换「\(targetName ?? "目标")」中的选中文字" : nil
             let paste = canPasteResult
                 ? verb.map { "⌘⏎ \($0)" } ?? targetName.map { "⌘⏎ 粘贴到「\($0)」" } ?? "⌘⏎ 粘贴"
@@ -704,11 +654,7 @@ final class InputPanel: NSObject {
         resultScroll.isHidden = !showResult
 
         guard let panel = panel else { return }
-        let mode = stage == .idle ? resolvedMode : submittedMode
-        resultHeightConstraint?.constant = mode == .webPage
-            ? Metrics.webResultHeight
-            : Metrics.resultHeight
-        let height = showResult ? Metrics.previewHeight(for: mode) : Metrics.idleHeight
+        let height = showResult ? Metrics.previewHeight : Metrics.idleHeight
         guard abs(panel.frame.height - height) > 0.5 || abs(panel.frame.width - Metrics.width) > 0.5 else {
             return
         }
@@ -783,8 +729,7 @@ final class InputPanel: NSObject {
     }
 
     private var canPasteResult: Bool {
-        submittedMode != .webPage
-            && accessibilityTrusted
+        accessibilityTrusted
             && target != nil
             && targetAllowsTextReplacement
     }
@@ -813,7 +758,6 @@ final class InputPanel: NSObject {
             mode: submittedMode,
             tone: selectedTone,
             text: text,
-            includeSummary: summaryCheck.state == .on,
             customInstructions: Config.customInstructions
         )
         Log.flow.notice("submit: 开始 \(self.submittedMode.rawValue, privacy: .public)，\(text.count) 字")
@@ -860,7 +804,6 @@ final class InputPanel: NSObject {
         Log.flow.notice("submit: 处理成功（\(result.count) 字符）")
         setResult(result)
         if Config.autoPaste,
-           submittedMode != .webPage,
            canPasteResult,
            panel?.isVisible == true {
             stage = .preview

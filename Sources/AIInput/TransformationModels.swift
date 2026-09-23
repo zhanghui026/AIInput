@@ -4,14 +4,12 @@ enum TransformMode: String, CaseIterable, Sendable {
     case zhToEnglish
     case englishToChinese
     case polish
-    case webPage
 
     var displayName: String {
         switch self {
         case .zhToEnglish: return "中译英"
         case .englishToChinese: return "英译中"
         case .polish: return "润色"
-        case .webPage: return "网页翻译"
         }
     }
 }
@@ -20,13 +18,11 @@ enum TransformMode: String, CaseIterable, Sendable {
 enum PanelMode: String, CaseIterable, Sendable {
     case translate
     case polish
-    case webPage
 
     var displayName: String {
         switch self {
         case .translate: return "翻译"
         case .polish: return "润色"
-        case .webPage: return "网页"
         }
     }
 }
@@ -50,33 +46,16 @@ enum ModeResolver {
     static func resolve(panelMode: PanelMode,
                         direction: TranslationDirection,
                         text: String) -> TransformMode {
-        if panelMode == .webPage || isSingleURL(text) {
-            return .webPage
-        }
         switch panelMode {
         case .polish:
             return .polish
-        case .translate, .webPage:
+        case .translate:
             switch direction {
             case .zhToEnglish: return .zhToEnglish
             case .englishToChinese: return .englishToChinese
             case .auto: return LanguageDirectionDetector.resolvedMode(for: text)
             }
         }
-    }
-
-    /// 整段输入恰好是一个 http(s) 链接。
-    static func isSingleURL(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-              let components = URLComponents(string: trimmed),
-              let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              components.host?.isEmpty == false else {
-            return false
-        }
-        return true
     }
 }
 
@@ -114,19 +93,16 @@ struct TransformationRequest: Equatable, Sendable {
     let mode: TransformMode
     let tone: WritingTone
     let text: String
-    let includeSummary: Bool
     /// 用户在设置里写的长期要求（术语表、风格偏好），为空则不注入。
     let customInstructions: String
 
     init(mode: TransformMode,
          tone: WritingTone,
          text: String,
-         includeSummary: Bool = false,
          customInstructions: String = "") {
         self.mode = mode
         self.tone = tone
         self.text = text
-        self.includeSummary = includeSummary
         self.customInstructions = customInstructions
     }
 }
