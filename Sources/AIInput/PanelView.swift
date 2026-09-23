@@ -46,6 +46,9 @@ struct PanelView: View {
     @State private var editingSource = false
     @State private var sourceHeight: CGFloat = 56
     @State private var resultHeight: CGFloat = 28
+    @State private var refining = false
+    @State private var refineText = ""
+    @FocusState private var refineFieldFocused: Bool
 
     private var showsEditor: Bool {
         model.viewMode == .single && (model.stage == .idle || editingSource)
@@ -60,7 +63,11 @@ struct PanelView: View {
             header
             content
             if !inToneView {
-                toneRow
+                if refining, model.stage == .preview {
+                    refineRow
+                } else {
+                    toneRow
+                }
             }
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
@@ -73,7 +80,11 @@ struct PanelView: View {
         .frame(width: Self.width, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: model.stage) { stage in
-            if stage == .running { editingSource = false }
+            if stage == .running {
+                editingSource = false
+                refining = false
+                refineText = ""
+            }
         }
     }
 
@@ -406,6 +417,44 @@ struct PanelView: View {
         }
     }
 
+    // MARK: - 微调（⌘L）
+
+    private var refineRow: some View {
+        HStack(spacing: 7) {
+            Text("微调")
+                .font(Typography.ui(12))
+                .foregroundColor(.secondary)
+            ForEach(["更短", "更正式", "更口语"], id: \.self) { preset in
+                Chip(title: preset, shortcut: nil, isSelected: false) {
+                    model.refine(instruction: preset)
+                }
+            }
+            TextField("或者写一句要求，回车执行", text: $refineText)
+                .textFieldStyle(.plain)
+                .font(Typography.ui(12.5))
+                .focused($refineFieldFocused)
+                .onSubmit { model.refine(instruction: refineText) }
+                .onExitCommand { closeRefine() }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .overlay(Capsule().stroke(Color.accentColor.opacity(0.45), lineWidth: 0.5))
+            HintButton(key: "esc", title: "返回", action: closeRefine)
+        }
+    }
+
+    private func openRefine() {
+        guard model.stage == .preview else { return }
+        refining.toggle()
+        if refining {
+            DispatchQueue.main.async { refineFieldFocused = true }
+        }
+    }
+
+    private func closeRefine() {
+        refining = false
+        refineText = ""
+    }
+
     // MARK: - 底栏
 
     private var footer: some View {
@@ -457,6 +506,8 @@ struct PanelView: View {
             case .running:
                 HintButton(key: "esc", title: "取消", action: actions.close)
             case .preview:
+                HintButton(key: "⌘L", title: "微调", action: openRefine)
+                    .keyboardShortcut("l", modifiers: .command)
                 HintButton(key: "⌘R", title: "重来", action: model.submit)
                     .keyboardShortcut("r", modifiers: .command)
                 HintButton(key: "⇧⌘C", title: "复制", action: actions.copy)

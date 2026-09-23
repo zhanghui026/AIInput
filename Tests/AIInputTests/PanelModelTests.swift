@@ -158,6 +158,28 @@ final class PanelModelTests: XCTestCase {
         XCTAssertEqual(transformer.requests.first?.customInstructions, "术语：大模型 → LLM")
     }
 
+    func testRefineRewritesTheCurrentResultAsANewVersion() async throws {
+        transformer.results = ["Please join tomorrow's meeting at 3 p.m.", "Meeting at 3 tomorrow."]
+        model.load(text: "明天下午三点开会", origin: .selection)
+        model.setTone(.professional)
+        model.submit()
+        try await waitFor { self.model.stage == .preview }
+
+        model.refine(instruction: "更短")
+        XCTAssertEqual(model.stage, .running)
+        try await waitFor { self.model.stage == .preview }
+
+        let request = try XCTUnwrap(transformer.requests.last)
+        XCTAssertEqual(request.refinement, .init(current: "Please join tomorrow's meeting at 3 p.m.", instruction: "更短"))
+        XCTAssertEqual(request.tone, .professional)
+        XCTAssertEqual(request.text, "明天下午三点开会")
+        XCTAssertEqual(model.versions.map(\.text), ["Please join tomorrow's meeting at 3 p.m.", "Meeting at 3 tomorrow."])
+        XCTAssertEqual(model.versions.last?.mode, .zhToEnglish)
+
+        model.refine(instruction: "   ")
+        XCTAssertEqual(model.stage, .preview, "空指令不发请求")
+    }
+
     private func waitFor(timeout: TimeInterval = 2,
                          _ condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)

@@ -102,20 +102,29 @@ extension WritingTone {
 }
 
 struct TransformationRequest: Equatable, Sendable {
+    /// 在已有结果上按一句话要求改写（⌘L 微调）。
+    struct Refinement: Equatable, Sendable {
+        let current: String
+        let instruction: String
+    }
+
     let mode: TransformMode
     let tone: WritingTone
     let text: String
     /// 用户在设置里写的长期要求（术语表、风格偏好），为空则不注入。
     let customInstructions: String
+    let refinement: Refinement?
 
     init(mode: TransformMode,
          tone: WritingTone,
          text: String,
-         customInstructions: String = "") {
+         customInstructions: String = "",
+         refinement: Refinement? = nil) {
         self.mode = mode
         self.tone = tone
         self.text = text
         self.customInstructions = customInstructions
+        self.refinement = refinement
     }
 }
 

@@ -306,23 +306,38 @@ final class PanelModel: ObservableObject {
         guard !isComposing() else { return }
         let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        cancelRequest()
         lastSubmittedText = text
-
-        let mode = resolvedMode
-        submittedMode = mode
-        let request = TransformationRequest(
-            mode: mode,
+        run(TransformationRequest(
+            mode: resolvedMode,
             tone: tone,
             text: text,
             customInstructions: preferences.customInstructions
-        )
+        ))
+    }
+
+    /// ⌘L：按一句话要求改写当前结果，得到新版本（⌘[ 可回到改写前）。
+    func refine(instruction: String) {
+        let instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard stage == .preview, !instruction.isEmpty, let current = currentVersion else { return }
+        run(TransformationRequest(
+            mode: current.mode,
+            tone: tone,
+            text: sourceText.trimmingCharacters(in: .whitespacesAndNewlines),
+            customInstructions: preferences.customInstructions,
+            refinement: .init(current: current.text, instruction: instruction)
+        ))
+    }
+
+    private func run(_ request: TransformationRequest) {
+        cancelRequest()
+        let mode = request.mode
+        submittedMode = mode
         notice = nil
         let id = UUID()
         requestID = id
         streamingText = ""
         stage = .running
-        Log.flow.notice("submit: 开始 \(mode.rawValue, privacy: .public)，\(text.count) 字")
+        Log.flow.notice("submit: 开始 \(mode.rawValue, privacy: .public)\(request.refinement == nil ? "" : "（微调）", privacy: .public)，\(request.text.count) 字")
 
         let transformer = transformer
         task = Task { [weak self] in
