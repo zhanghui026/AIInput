@@ -6,9 +6,14 @@ final class SettingsWindowController: NSWindowController {
     private let apiKeyField = NSSecureTextField()
     private let baseUrlField = NSTextField()
     private let modelField = NSTextField()
+    private let autoPasteCheck = NSButton(
+        checkboxWithTitle: "结果生成后直接粘贴（跳过预览）",
+        target: nil,
+        action: nil
+    )
 
     init() {
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 310),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 370),
                            styleMask: [.titled, .closable],
                            backing: .buffered, defer: false)
         win.title = "AIInput 设置"
@@ -49,6 +54,13 @@ final class SettingsWindowController: NSWindowController {
         content.addArrangedSubview(row(label: "API Key", field: apiKeyField))
         content.addArrangedSubview(row(label: "Base URL", field: baseUrlField))
         content.addArrangedSubview(row(label: "模型", field: modelField))
+
+        let behaviorTitle = NSTextField(labelWithString: "使用习惯")
+        behaviorTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        content.setCustomSpacing(20, after: content.arrangedSubviews.last!)
+        content.addArrangedSubview(behaviorTitle)
+        autoPasteCheck.toolTip = "关闭时（默认）先在面板预览，⌘⏎ 粘贴、⌘R 重来；网页结果始终预览。"
+        content.addArrangedSubview(autoPasteCheck)
 
         let saveBtn = NSButton(title: "保存", target: self, action: #selector(save))
         saveBtn.bezelStyle = .push
@@ -91,6 +103,7 @@ final class SettingsWindowController: NSWindowController {
         Config.apiKey = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.baseUrl = baseUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.model = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        Config.autoPaste = autoPasteCheck.state == .on
         window?.close()
     }
 
@@ -98,6 +111,7 @@ final class SettingsWindowController: NSWindowController {
         apiKeyField.stringValue = Config.apiKey
         baseUrlField.stringValue = Config.baseUrl
         modelField.stringValue = Config.model
+        autoPasteCheck.state = Config.autoPaste ? .on : .off
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
