@@ -34,21 +34,34 @@ struct PanelView: View {
     static let width: CGFloat = 680
 
     @ObservedObject var model: PanelModel
+    @ObservedObject var toneBoard: ToneBoard
     let actions: PanelActions
+
+    init(model: PanelModel, actions: PanelActions) {
+        self.model = model
+        self.toneBoard = model.toneBoard
+        self.actions = actions
+    }
 
     @State private var editingSource = false
     @State private var sourceHeight: CGFloat = 56
     @State private var resultHeight: CGFloat = 28
 
     private var showsEditor: Bool {
-        model.stage == .idle || editingSource
+        model.viewMode == .single && (model.stage == .idle || editingSource)
+    }
+
+    private var inToneView: Bool {
+        model.viewMode == .tones
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             content
-            toneRow
+            if !inToneView {
+                toneRow
+            }
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 0.5)
@@ -79,8 +92,11 @@ struct PanelView: View {
                 directionMenu
             }
             Spacer(minLength: 8)
-            if model.versions.count > 1 {
+            if model.versions.count > 1, !inToneView {
                 versionStepper
+            }
+            if model.panelMode == .translate {
+                viewSwitch
             }
             modeToggle
         }
@@ -156,6 +172,30 @@ struct PanelView: View {
         .help("切换版本（⌘[ / ⌘]）")
     }
 
+    private var viewSwitch: some View {
+        Button(action: model.toggleToneView) {
+            HStack(spacing: 6) {
+                Text("单个")
+                    .fontWeight(inToneView ? .regular : .semibold)
+                    .foregroundColor(inToneView ? .secondary : .primary)
+                Text("多语气")
+                    .fontWeight(inToneView ? .semibold : .regular)
+                    .foregroundColor(inToneView ? .primary : .secondary)
+                Keycap("⌘K")
+            }
+            .font(Typography.ui(12.5))
+            .padding(.leading, 11)
+            .padding(.trailing, 6)
+            .padding(.vertical, 4)
+            .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("k", modifiers: .command)
+        .disabled(!model.canShowToneView && !inToneView)
+        .help("同时查看多个语气的译文（⌘K）")
+    }
+
     private var modeToggle: some View {
         let isTranslate = model.panelMode == .translate
         return Button(action: model.toggleMode) {
@@ -186,7 +226,12 @@ struct PanelView: View {
 
     @ViewBuilder
     private var content: some View {
-        if showsEditor {
+        if inToneView {
+            VStack(alignment: .leading, spacing: 12) {
+                sourceQuote
+                ToneBoardView(board: toneBoard)
+            }
+        } else if showsEditor {
             sourceEditor
         } else if model.submittedMode == .polish {
             // 润色：左原文、右结果，逐句对照。
@@ -318,7 +363,11 @@ struct PanelView: View {
         HStack(spacing: 12) {
             footerHints
             Spacer(minLength: 8)
-            PrimaryButton(title: primaryTitle, isBusy: model.stage == .running, action: actions.primary)
+            PrimaryButton(
+                title: primaryTitle,
+                isBusy: inToneView ? toneBoard.chosenText == nil : model.stage == .running,
+                action: actions.primary
+            )
                 .keyboardShortcut(.return, modifiers: .command)
         }
     }
@@ -338,6 +387,21 @@ struct PanelView: View {
                     .lineLimit(1)
                     .help("在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 AIInput")
             }
+            if inToneView {
+                Text("⌘1–4 选中")
+                    .font(Typography.ui(12))
+                    .foregroundColor(.secondary)
+                HintButton(key: "⌘K", title: "用选中的回到单个", action: model.toggleToneView)
+                HintButton(key: "esc", title: "关闭", action: actions.close)
+            } else {
+                stageHints
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stageHints: some View {
+        HStack(spacing: 12) {
             switch model.stage {
             case .idle:
                 HintButton(key: "esc", title: "关闭", action: actions.close)
@@ -358,6 +422,12 @@ struct PanelView: View {
     }
 
     private var primaryTitle: String {
+        if inToneView {
+            guard let chosen = toneBoard.chosen, toneBoard.chosenText != nil else { return "等待结果" }
+            let name = "「\(chosen.chipName)」"
+            guard model.target.canPaste else { return "复制\(name)" }
+            return model.origin == .selection ? "用\(name)替换" : "粘贴\(name)"
+        }
         switch model.stage {
         case .idle:
             return model.resolvedMode == .polish ? "润色" : "翻译"

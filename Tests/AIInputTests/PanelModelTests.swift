@@ -185,12 +185,15 @@ final class FakeTransformer: TextTransforming, @unchecked Sendable {
     var results: [String] = []
     var error: Error?
     var delay: UInt64 = 0
+    /// 为 true 时按语气返回 "tone:<rawValue>"，便于并行请求的断言。
+    var echoTone = false
     private(set) var requests: [TransformationRequest] = []
 
     func perform(_ request: TransformationRequest,
                  onPartial: TranslationService.PartialHandler?) async throws -> String {
         let result: String = lock.withLock {
             requests.append(request)
+            if echoTone { return "tone:\(request.tone.rawValue)" }
             return results.isEmpty ? "result" : results.removeFirst()
         }
         for partial in partials {

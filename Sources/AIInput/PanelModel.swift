@@ -67,6 +67,12 @@ final class PanelModel: ObservableObject {
         var accessibilityTrusted = true
     }
 
+    /// 单个结果，或同时看多个语气（仅翻译）。
+    enum ViewMode: Equatable {
+        case single
+        case tones
+    }
+
     enum PrimaryAction: Equatable {
         case none
         case submit
@@ -84,6 +90,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var versionIndex = 0
     @Published private(set) var streamingText = ""
     @Published private(set) var submittedMode: TransformMode?
+    @Published private(set) var viewMode: ViewMode = .single
+    let toneBoard: ToneBoard
     @Published var target = Target()
     /// 底栏的临时提示（例如“未能自动粘贴”），开始新一轮或新请求时清除。
     @Published var notice: String?
@@ -102,6 +110,7 @@ final class PanelModel: ObservableObject {
     init(transformer: TextTransforming, preferences: PanelPreferences) {
         self.transformer = transformer
         self.preferences = preferences
+        toneBoard = ToneBoard(transformer: transformer, preferences: preferences)
         panelMode = preferences.panelMode
         direction = preferences.direction
         tone = preferences.tone
@@ -143,6 +152,8 @@ final class PanelModel: ObservableObject {
     /// 开始新一轮：载入带进来的原文（或清空），丢弃旧结果。
     func load(text: String, origin: Origin) {
         cancelRequest()
+        toneBoard.reset()
+        viewMode = .single
         notice = nil
         sourceText = text
         self.origin = text.isEmpty ? .typed : origin
@@ -156,6 +167,8 @@ final class PanelModel: ObservableObject {
     func editSource(_ text: String) {
         guard text != sourceText else { return }
         sourceText = text
+        toneBoard.reset()
+        viewMode = .single
         if text.isEmpty {
             origin = .typed
         }
@@ -194,6 +207,11 @@ final class PanelModel: ObservableObject {
         guard mode != panelMode else { return }
         panelMode = mode
         preferences.panelMode = mode
+        if mode != .translate, viewMode == .tones {
+            // 多语气视图只用于翻译。
+            toneBoard.reset()
+            viewMode = .single
+        }
         rerunIfNeeded()
     }
 
@@ -209,9 +227,50 @@ final class PanelModel: ObservableObject {
     }
 
     private func rerunIfNeeded() {
-        if stage != .idle {
+        if viewMode == .tones {
+            openToneBoard()
+        } else if stage != .idle {
             submit()
         }
+    }
+
+    // MARK: - 多语气视图（⌘K）
+
+    var canShowToneView: Bool {
+        panelMode == .translate && hasSource
+    }
+
+    /// 打开或关闭多语气视图；关闭时把选中的那张卡片作为新版本带回单个视图。
+    func toggleToneView() {
+        switch viewMode {
+        case .single:
+            guard canShowToneView else { return }
+            viewMode = .tones
+            openToneBoard()
+        case .tones:
+            adoptChosenTone()
+            toneBoard.cancelRunning()
+            viewMode = .single
+        }
+    }
+
+    private func openToneBoard() {
+        let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        toneBoard.open(text: text, mode: resolvedMode, currentTone: tone)
+    }
+
+    private func adoptChosenTone() {
+        guard let chosen = toneBoard.chosen, let text = toneBoard.chosenText else { return }
+        cancelRequest()
+        tone = chosen
+        preferences.tone = chosen
+        let mode = resolvedMode
+        submittedMode = mode
+        if currentVersion?.text != text {
+            versions.append(Version(text: text, mode: mode, tone: chosen))
+            versionIndex = versions.count - 1
+        }
+        stage = .preview
     }
 
     // MARK: - 版本
@@ -280,6 +339,7 @@ final class PanelModel: ObservableObject {
 
     /// 取消进行中的请求；有旧版本时回到它，否则回到编辑原文。
     func cancel() {
+        toneBoard.cancelRunning()
         guard stage == .running else { return }
         cancelRequest()
         stage = versions.isEmpty ? .idle : .preview
@@ -297,6 +357,10 @@ final class PanelModel: ObservableObject {
     // MARK: - 主按钮 ⌘⏎
 
     func primaryAction() -> PrimaryAction {
+        if viewMode == .tones {
+            guard let text = toneBoard.chosenText else { return .none }
+            return target.canPaste ? .paste(text) : .copy(text)
+        }
         switch stage {
         case .idle, .failed:
             return hasSource ? .submit : .none
