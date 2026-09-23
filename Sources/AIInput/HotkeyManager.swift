@@ -1,7 +1,7 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// 全局热键管理。用 Carbon RegisterEventHotKey 注册 Ctrl+Option+Cmd+E。
+/// 全局热键管理。用 Carbon RegisterEventHotKey 注册，热键可在设置里修改（默认 ⌃⌥⌘E）。
 final class HotkeyManager: @unchecked Sendable {
     static let shared = HotkeyManager()
 
@@ -10,17 +10,34 @@ final class HotkeyManager: @unchecked Sendable {
 
     private init() {}
 
-    /// 注册成功返回 true。
-    @discardableResult
-    func register() -> Bool {
-        if hotKeyRef != nil { return true }
+    private(set) var current: Hotkey?
 
+    /// 注册成功返回 true；已有热键会先注销，失败时不保留任何热键。
+    @discardableResult
+    func register(_ hotkey: Hotkey) -> Bool {
+        guard installHandlerIfNeeded() else { return false }
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+            current = nil
+        }
+        let id = EventHotKeyID(signature: fourCharCode("AIIN"), id: hotkeyId)
+        let status = RegisterEventHotKey(hotkey.keyCode, hotkey.carbonModifiers, id,
+                                         GetApplicationEventTarget(), 0, &hotKeyRef)
+        guard status == noErr else {
+            hotKeyRef = nil
+            return false
+        }
+        current = hotkey
+        return true
+    }
+
+    private func installHandlerIfNeeded() -> Bool {
+        if eventHandler != nil { return true }
         // kEventHotKeyPressed：按键按下时触发。
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                  eventKind: UInt32(kEventHotKeyPressed))
-
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, eventRef, userData) -> OSStatus in
@@ -47,29 +64,14 @@ final class HotkeyManager: @unchecked Sendable {
             selfPtr,
             &eventHandler
         )
-        guard status == noErr else { return false }
-
-        let id = EventHotKeyID(signature: fourCharCode("AIIN"), id: hotkeyId)
-        // keyCode 14 = 'E'；修饰键 control+option+command。
-        let mods = UInt32(controlKey | optionKey | cmdKey)
-        let regStatus = RegisterEventHotKey(14, mods, id,
-                                            GetApplicationEventTarget(),
-                                            0,
-                                            &hotKeyRef)
-        if regStatus != noErr {
-            if let handler = eventHandler {
-                RemoveEventHandler(handler)
-                eventHandler = nil
-            }
-            return false
-        }
-        return true
+        return status == noErr
     }
 
     func unregister() {
         if let ref = hotKeyRef {
             UnregisterEventHotKey(ref)
             hotKeyRef = nil
+            current = nil
         }
         if let handler = eventHandler {
             RemoveEventHandler(handler)

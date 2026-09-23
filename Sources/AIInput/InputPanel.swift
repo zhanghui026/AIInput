@@ -60,6 +60,9 @@ final class InputPanel: NSObject {
         }
     }
 
+    /// 设置页用来显示条数和清空。
+    var history: HistoryStore { model.history }
+
     /// App 启动时调用：此前已在剪贴板里的内容不算“新复制”，不会被自动处理。
     func recordClipboardBaseline() {
         seenClipboardChangeCount = NSPasteboard.general.changeCount

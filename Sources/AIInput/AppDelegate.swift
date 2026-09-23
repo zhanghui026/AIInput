@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var accessibilityStatusItem: NSMenuItem?
     private var accessibilityActionItem: NSMenuItem?
+    private var toggleItem: NSMenuItem?
     private var settingsController: SettingsWindowController?
     private let accessibilityPermission = AccessibilityPermissionManager.shared
 
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // NSTextField 的 Cmd+C/Cmd+V/Cmd+A 等快捷键失效——Edit 菜单是这些
         // 命令在响应链中的来源。
         installMainMenu()
+        Config.migrateLegacyAPIKey()
 
         // 菜单栏图标
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -24,7 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 accessibilityDescription: "AIInput")
         }
         let menu = NSMenu()
-        menu.addItem(withTitle: "显示/关闭输入框（Ctrl+⌥+⌘+E）", action: #selector(trigger), keyEquivalent: "")
+        toggleItem = menu.addItem(withTitle: "", action: #selector(trigger), keyEquivalent: "")
+        updateToggleTitle()
         menu.addItem(.separator())
 
         let permissionStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -42,10 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityActionItem = permissionActionItem
 
         menu.addItem(.separator())
-        let resetPosition = NSMenuItem(title: "重置面板位置", action: #selector(resetPanelPosition), keyEquivalent: "")
-        resetPosition.target = self
-        resetPosition.toolTip = "忘记拖动过的位置，面板重新贴在文字下方或屏幕上方居中"
-        menu.addItem(resetPosition)
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -106,14 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         InputPanel.shared.rememberPotentialTarget(app)
     }
 
-    @objc private func resetPanelPosition() {
-        Config.clearPinnedPanelOrigins()
-        Log.flow.notice("place: 已重置面板位置")
-    }
-
     @objc private func openSettings() {
         if settingsController == nil {
-            settingsController = SettingsWindowController()
+            settingsController = SettingsWindowController { [weak self] hotkey in
+                self?.applyHotkey(hotkey) ?? false
+            }
         }
         settingsController?.show()
     }
@@ -176,9 +172,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return !others.isEmpty
     }
 
+    /// 设置里换热键：先试注册新的，失败则恢复旧的并返回 false。
+    func applyHotkey(_ hotkey: Hotkey) -> Bool {
+        let previous = HotkeyManager.shared.current ?? Config.hotkey
+        guard HotkeyManager.shared.register(hotkey) else {
+            HotkeyManager.shared.register(previous)
+            return false
+        }
+        Config.hotkey = hotkey
+        updateToggleTitle()
+        Log.flow.notice("hotkey: 已改为 \(hotkey.displayString, privacy: .public)")
+        return true
+    }
+
+    private func updateToggleTitle() {
+        toggleItem?.title = "显示/关闭输入框（\(Config.hotkey.displayString)）"
+    }
+
     /// 旧实例退出、释放热键需要一点时间，注册失败时短暂重试。
     private func registerHotkey(retriesLeft: Int) {
-        if HotkeyManager.shared.register() { return }
+        if HotkeyManager.shared.register(Config.hotkey) { return }
         guard retriesLeft > 0 else {
             promptHotkeyFailure()
             return
@@ -192,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "全局热键注册失败"
-            alert.informativeText = "Ctrl+Option+Command+E 可能已被其他 App 占用。你仍可从菜单栏图标打开输入框。"
+            alert.informativeText = "\(Config.hotkey.displayString) 可能已被其他 App 占用。你仍可从菜单栏图标打开输入框，或在「设置」里换一个热键。"
             alert.addButton(withTitle: "知道了")
             alert.runModal()
         }

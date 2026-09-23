@@ -1,7 +1,7 @@
 import Foundation
 
 /// 读写应用配置。API Key 的读取顺序：~/.aiinput/key 文件 → 环境变量
-/// MINIMAX_API_KEY → UserDefaults（设置窗口手动填写）。
+/// MINIMAX_API_KEY；设置窗口填写的 key 也写入该文件。
 /// 注意：通过 Finder 双击启动的 GUI App 拿不到 shell 环境变量，故推荐把 key
 /// 写入 ~/.aiinput/key（见 README 的安装步骤），App 启动时读取该文件。
 enum Config {
@@ -19,6 +19,7 @@ enum Config {
         static let favoriteTones = "favoriteTones"
         static let pinnedPanelOrigins = "pinnedPanelOrigins"
         static let historyEnabled = "historyEnabled"
+        static let hotkey = "hotkey"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -42,14 +43,25 @@ enum Config {
             if let env = ProcessInfo.processInfo.environment[envApiKey], !env.isEmpty {
                 return env
             }
-            // 3. UserDefaults
-            return defaults.string(forKey: Keys.apiKey) ?? ""
+            return ""
         }
         set {
-            defaults.set(newValue, forKey: Keys.apiKey)
-            // 同步写入文件，便于双击启动时使用。
+            // 只写入 ~/.aiinput/key（仅当前用户可读），不再在偏好设置里留明文副本。
             writeKeyFile(newValue)
         }
+    }
+
+    /// 旧版本会把 key 明文存进偏好设置。启动时搬到 key 文件（文件里没有时），然后删除。
+    static func migrateLegacyAPIKey() {
+        guard let legacy = defaults.string(forKey: Keys.apiKey) else { return }
+        let trimmed = legacy.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileKey = (try? String(contentsOf: keyFileURL, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if fileKey.isEmpty, !trimmed.isEmpty {
+            writeKeyFile(trimmed)
+        }
+        defaults.removeObject(forKey: Keys.apiKey)
+        Log.flow.notice("config: 已移除偏好设置里的明文 API Key")
     }
 
     /// 把 key 写入 ~/.aiinput/key，权限设为 600。
@@ -133,6 +145,14 @@ enum Config {
 
     static func clearPinnedPanelOrigins() {
         defaults.removeObject(forKey: Keys.pinnedPanelOrigins)
+    }
+
+    static var hotkey: Hotkey {
+        get {
+            defaults.data(forKey: Keys.hotkey)
+                .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) } ?? .default
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Keys.hotkey) }
     }
 
     /// 是否记录用过的结果（⌘Y 历史）。
