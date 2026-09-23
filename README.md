@@ -44,6 +44,14 @@ AIINPUT_ALLOW_UNSAFE_ADHOC=1 ./build.sh
 
 可用 `./build.sh --check-stable-dr`（配合上面任一环境变量）连续构建两次并验证代码身份稳定。Codex App 的 “Run (local development)” 动作会明确使用本地 ad-hoc 模式。
 
+打包 DMG（产物在 `dist/`，含拖拽到「应用程序」的快捷方式）：
+
+```bash
+AIINPUT_SIGN_IDENTITY="<证书 SHA-1>" ./script/package_dmg.sh
+```
+
+没有证书时可用 `AIINPUT_ALLOW_UNSAFE_ADHOC=1 ./script/package_dmg.sh`，但该 DMG 未签名公证，只适合本机安装。
+
 ## 首次使用
 
 1. **写入 API Key**（GUI App 拿不到 shell 环境变量，故需写入文件）：
