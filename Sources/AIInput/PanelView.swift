@@ -312,17 +312,66 @@ struct PanelView: View {
             }
             .frame(height: 28)
         default:
-            GrowingTextView(
-                text: model.stage == .running ? model.streamingText + " ▍" : model.resultText,
-                font: Typography.result(size: model.submittedMode == .polish ? 17 : 19),
-                isEditable: model.stage == .preview,
-                maxHeight: 300,
-                height: $resultHeight,
-                onChange: model.editResult,
-                onCommand: handle
-            )
-            .frame(height: resultHeight)
+            let segments = model.revisionSegments
+            let showsMarks = segments != nil && model.showsRevisions
+            VStack(alignment: .leading, spacing: 6) {
+                GrowingTextView(
+                    text: model.stage == .running ? model.streamingText + " ▍" : model.resultText,
+                    attributedText: showsMarks ? segments.map(revisionText) : nil,
+                    font: Typography.result(size: model.submittedMode == .polish ? 17 : 19),
+                    isEditable: model.stage == .preview && !showsMarks,
+                    maxHeight: 300,
+                    height: $resultHeight,
+                    onChange: model.editResult,
+                    onCommand: handle
+                )
+                .frame(height: resultHeight)
+                if let segments {
+                    revisionBar(changes: TextDiff.changeCount(segments))
+                }
+            }
         }
+    }
+
+    private func revisionBar(changes: Int) -> some View {
+        HStack(spacing: 8) {
+            Text(changes == 0 ? "没有需要修改的地方" : "\(changes) 处修改")
+                .font(Typography.ui(12))
+                .foregroundColor(.secondary)
+            HintButton(
+                key: "⌘D",
+                title: model.showsRevisions ? "隐藏修订，直接编辑" : "显示修订",
+                action: model.toggleRevisions
+            )
+            .keyboardShortcut("d", modifiers: .command)
+        }
+    }
+
+    private func revisionText(_ segments: [TextDiff.Segment]) -> NSAttributedString {
+        let font = Typography.result(size: 17)
+        let result = NSMutableAttributedString()
+        for segment in segments {
+            switch segment {
+            case .same(let text):
+                result.append(NSAttributedString(string: text, attributes: [
+                    .font: font, .foregroundColor: NSColor.labelColor,
+                ]))
+            case .removed(let text):
+                result.append(NSAttributedString(string: text, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.systemRed,
+                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                    .strikethroughColor: NSColor.systemRed,
+                ]))
+            case .inserted(let text):
+                result.append(NSAttributedString(string: text, attributes: [
+                    .font: font,
+                    .foregroundColor: RevisionColors.insertedText,
+                    .backgroundColor: NSColor.systemGreen.withAlphaComponent(0.16),
+                ]))
+            }
+        }
+        return result
     }
 
     // MARK: - 语气
@@ -457,6 +506,16 @@ struct PanelView: View {
 }
 
 // MARK: - 组件
+
+private enum RevisionColors {
+    /// 深浅色模式下都清楚的绿色：浅色用深绿，深色用浅绿。
+    static let insertedText = NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark
+            ? NSColor(srgbRed: 0.55, green: 0.85, blue: 0.55, alpha: 1)
+            : NSColor(srgbRed: 0.12, green: 0.45, blue: 0.16, alpha: 1)
+    }
+}
 
 struct Keycap: View {
     let text: String

@@ -12,6 +12,8 @@ struct GrowingTextView: NSViewRepresentable {
     }
 
     var text: String
+    /// 有值时只读显示这段富文本（修订痕迹），否则显示并编辑 `text`。
+    var attributedText: NSAttributedString?
     var font: NSFont
     var textColor: NSColor = .labelColor
     var isEditable = true
@@ -58,16 +60,29 @@ struct GrowingTextView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
-        textView.font = font
-        textView.textColor = textColor
+        if attributedText == nil {
+            // 修订痕迹自带颜色；统一设置字色会把红绿抹掉。
+            textView.font = font
+            textView.textColor = textColor
+        }
         textView.insertionPointColor = textColor
         textView.isEditable = isEditable
         textView.isSelectable = true
         textView.placeholder = placeholder
         textView.placeholderFont = font
-        // 组词中不能改写内容，否则会打断输入法。
-        if textView.string != text, !textView.hasMarkedText() {
-            textView.string = text
+        if let attributedText {
+            if !textView.attributedString().isEqual(to: attributedText) {
+                textView.textStorage?.setAttributedString(attributedText)
+            }
+            context.coordinator.showsAttributedText = true
+        } else if (textView.string != text || context.coordinator.showsAttributedText),
+                  !textView.hasMarkedText() {
+            // 组词中不能改写内容，否则会打断输入法。
+            textView.textStorage?.setAttributedString(NSAttributedString(
+                string: text,
+                attributes: [.font: font, .foregroundColor: textColor]
+            ))
+            context.coordinator.showsAttributedText = false
             textView.needsDisplay = true
         }
         context.coordinator.recalculateHeight()
@@ -89,6 +104,7 @@ struct GrowingTextView: NSViewRepresentable {
         var parent: GrowingTextView
         weak var textView: PlaceholderTextView?
         var didAutoFocus = false
+        var showsAttributedText = false
 
         init(_ parent: GrowingTextView) {
             self.parent = parent

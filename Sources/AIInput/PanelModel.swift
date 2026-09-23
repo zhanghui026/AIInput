@@ -91,6 +91,8 @@ final class PanelModel: ObservableObject {
     @Published private(set) var streamingText = ""
     @Published private(set) var submittedMode: TransformMode?
     @Published private(set) var viewMode: ViewMode = .single
+    /// 润色结果是否标出修订痕迹（⌘D 切换）。
+    @Published private(set) var showsRevisions = true
     let toneBoard: ToneBoard
     @Published var target = Target()
     /// 底栏的临时提示（例如“未能自动粘贴”），开始新一轮或新请求时清除。
@@ -271,6 +273,21 @@ final class PanelModel: ObservableObject {
             versionIndex = versions.count - 1
         }
         stage = .preview
+    }
+
+    // MARK: - 修订痕迹（润色）
+
+    /// 润色结果相对原文的改动；不是润色结果或正在生成时为 nil。
+    var revisionSegments: [TextDiff.Segment]? {
+        guard stage == .preview, currentVersion?.mode == .polish, let current = currentVersion else {
+            return nil
+        }
+        let source = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TextDiff.segments(from: source, to: current.text)
+    }
+
+    func toggleRevisions() {
+        showsRevisions.toggle()
     }
 
     // MARK: - 版本
