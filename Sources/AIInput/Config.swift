@@ -16,6 +16,7 @@ enum Config {
         static let tone = "writingTone"
         static let includeSummary = "includeSummary"
         static let autoPaste = "autoPaste"
+        static let customInstructions = "customInstructions"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -106,6 +107,12 @@ enum Config {
     static var autoPaste: Bool {
         get { defaults.bool(forKey: Keys.autoPaste) }
         set { defaults.set(newValue, forKey: Keys.autoPaste) }
+    }
+
+    /// 个人要求 / 术语表，追加到每次请求的系统提示。
+    static var customInstructions: String {
+        get { defaults.string(forKey: Keys.customInstructions) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.customInstructions) }
     }
 
     static var isConfigured: Bool {

@@ -730,7 +730,8 @@ final class InputPanel: NSObject {
             mode: submittedMode,
             tone: selectedTone,
             text: text,
-            includeSummary: summaryCheck.state == .on
+            includeSummary: summaryCheck.state == .on,
+            customInstructions: Config.customInstructions
         )
         Log.flow.notice("submit: 开始 \(self.submittedMode.rawValue, privacy: .public)，\(text.count) 字")
         setResult("")

@@ -115,15 +115,19 @@ struct TransformationRequest: Equatable, Sendable {
     let tone: WritingTone
     let text: String
     let includeSummary: Bool
+    /// 用户在设置里写的长期要求（术语表、风格偏好），为空则不注入。
+    let customInstructions: String
 
     init(mode: TransformMode,
          tone: WritingTone,
          text: String,
-         includeSummary: Bool = false) {
+         includeSummary: Bool = false,
+         customInstructions: String = "") {
         self.mode = mode
         self.tone = tone
         self.text = text
         self.includeSummary = includeSummary
+        self.customInstructions = customInstructions
     }
 }
 

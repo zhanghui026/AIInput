@@ -111,7 +111,8 @@ final class TranslationService: @unchecked Sendable {
             let chunkRequest = TransformationRequest(
                 mode: .webPage,
                 tone: .faithful,
-                text: chunk
+                text: chunk,
+                customInstructions: request.customInstructions
             )
             do {
                 translatedChunks.append(
