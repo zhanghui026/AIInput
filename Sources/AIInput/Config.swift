@@ -17,6 +17,7 @@ enum Config {
         static let autoPaste = "autoPaste"
         static let customInstructions = "customInstructions"
         static let favoriteTones = "favoriteTones"
+        static let pinnedPanelOrigins = "pinnedPanelOrigins"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -114,6 +115,23 @@ enum Config {
             return stored.isEmpty ? defaultFavoriteTones : Array(stored.prefix(5))
         }
         set { defaults.set(newValue.prefix(5).map(\.rawValue), forKey: Keys.favoriteTones) }
+    }
+
+    /// 用户拖动面板后记住的位置（每块显示器一个左上角）。
+    static func pinnedPanelOrigin(forDisplay display: String) -> CGPoint? {
+        let all = defaults.dictionary(forKey: Keys.pinnedPanelOrigins) as? [String: [Double]]
+        guard let values = all?[display], values.count == 2 else { return nil }
+        return CGPoint(x: values[0], y: values[1])
+    }
+
+    static func setPinnedPanelOrigin(_ origin: CGPoint, forDisplay display: String) {
+        var all = defaults.dictionary(forKey: Keys.pinnedPanelOrigins) as? [String: [Double]] ?? [:]
+        all[display] = [Double(origin.x), Double(origin.y)]
+        defaults.set(all, forKey: Keys.pinnedPanelOrigins)
+    }
+
+    static func clearPinnedPanelOrigins() {
+        defaults.removeObject(forKey: Keys.pinnedPanelOrigins)
     }
 
     /// 个人要求 / 术语表，追加到每次请求的系统提示。

@@ -53,6 +53,85 @@ enum PanelPlacement {
         return Result(frame: fit(proposedFrame, in: visibleFrame, margin: margin), side: side)
     }
 
+    /// 面板内容相对面板左边缘的缩进：让面板里的文字与被翻译的文字左对齐。
+    static let contentInset: CGFloat = 22
+
+    /// 贴在选中文字（或光标）下方；下方放不下时翻到上方。不遮挡原文。
+    static func anchored(
+        below textRect: CGRect,
+        panelSize: CGSize,
+        visibleFrame: CGRect,
+        gap: CGFloat = 10,
+        margin: CGFloat = 8
+    ) -> Result {
+        let usableFrame = usableFrame(from: visibleFrame, margin: margin)
+        let text = textRect.standardized
+        let height = min(max(0, panelSize.height), usableFrame.height)
+        let roomBelow = text.minY - gap - usableFrame.minY
+        let roomAbove = usableFrame.maxY - text.maxY - gap
+
+        let side: Side
+        if roomBelow >= height {
+            side = .below
+        } else if roomAbove >= height {
+            side = .above
+        } else {
+            side = roomBelow >= roomAbove ? .below : .above
+        }
+        let originY = side == .below ? text.minY - gap - height : text.maxY + gap
+        let proposed = CGRect(
+            x: text.minX - contentInset,
+            y: originY,
+            width: panelSize.width,
+            height: height
+        )
+        return Result(frame: fit(proposed, in: visibleFrame, margin: margin), side: side)
+    }
+
+    /// 屏幕上方居中（像 Spotlight），只向下伸长。
+    static func topCenter(
+        panelSize: CGSize,
+        visibleFrame: CGRect,
+        topFraction: CGFloat = 0.18,
+        margin: CGFloat = 8
+    ) -> Result {
+        let frame = visibleFrame.standardized
+        let top = frame.maxY - frame.height * topFraction
+        let proposed = CGRect(
+            x: frame.midX - panelSize.width / 2,
+            y: top - panelSize.height,
+            width: panelSize.width,
+            height: panelSize.height
+        )
+        return Result(frame: fit(proposed, in: visibleFrame, margin: margin), side: .below)
+    }
+
+    /// 用户拖动后记住的位置（左上角），只向下伸长。
+    static func pinned(
+        topLeft: CGPoint,
+        panelSize: CGSize,
+        visibleFrame: CGRect,
+        margin: CGFloat = 8
+    ) -> Result {
+        let proposed = CGRect(
+            x: topLeft.x,
+            y: topLeft.y - panelSize.height,
+            width: panelSize.width,
+            height: panelSize.height
+        )
+        return Result(frame: fit(proposed, in: visibleFrame, margin: margin), side: .below)
+    }
+
+    /// 辅助功能坐标原点在主屏左上角、y 向下；Cocoa 原点在主屏左下角、y 向上。
+    static func cocoaRect(fromAX rect: CGRect, primaryScreenHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: rect.minX,
+            y: primaryScreenHeight - rect.maxY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
     static func fit(
         _ frame: CGRect,
         in visibleFrame: CGRect,

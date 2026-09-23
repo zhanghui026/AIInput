@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityActionItem = permissionActionItem
 
         menu.addItem(.separator())
+        let resetPosition = NSMenuItem(title: "重置面板位置", action: #selector(resetPanelPosition), keyEquivalent: "")
+        resetPosition.target = self
+        resetPosition.toolTip = "忘记拖动过的位置，面板重新贴在文字下方或屏幕上方居中"
+        menu.addItem(resetPosition)
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -100,6 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activeAppChanged(_ notification: Notification) {
         let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         InputPanel.shared.rememberPotentialTarget(app)
+    }
+
+    @objc private func resetPanelPosition() {
+        Config.clearPinnedPanelOrigins()
+        Log.flow.notice("place: 已重置面板位置")
     }
 
     @objc private func openSettings() {

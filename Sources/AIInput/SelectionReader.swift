@@ -62,6 +62,82 @@ enum SelectionReader {
         return range.length == 0 ? .none : .unknown
     }
 
+    /// 选中文字或光标在屏幕上的位置（Cocoa 坐标），用于把面板贴在文字下方。
+    /// 取不到时（多数 Electron App）返回 nil；过大的输入框（整篇文档）不作为锚点。
+    static func textBounds(in element: AXUIElement?) -> CGRect? {
+        guard let element, !isSecureTextElement(element) else { return nil }
+        var rangeValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeValue
+        ) == .success,
+           let rangeValue,
+           CFGetTypeID(rangeValue) == AXValueGetTypeID() {
+            var boundsValue: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(
+                element,
+                kAXBoundsForRangeParameterizedAttribute as CFString,
+                rangeValue,
+                &boundsValue
+            ) == .success,
+               let rect = rect(from: boundsValue),
+               rect.height > 0 {
+                return onScreen(cocoaRect(fromAX: rect))
+            }
+        }
+
+        guard isTextInput(element),
+              let position = point(of: element, kAXPositionAttribute),
+              let size = size(of: element, kAXSizeAttribute),
+              size.height > 0, size.height <= 200 else {
+            return nil
+        }
+        return onScreen(cocoaRect(fromAX: CGRect(origin: position, size: size)))
+    }
+
+    /// 目标 App 当前窗口的位置（Cocoa 坐标），用来决定面板出现在哪块屏幕。
+    static func focusedWindowFrame(of app: NSRunningApplication) -> CGRect? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = elementAttribute(kAXFocusedWindowAttribute, of: appElement),
+              let position = point(of: window, kAXPositionAttribute),
+              let size = size(of: window, kAXSizeAttribute) else {
+            return nil
+        }
+        return cocoaRect(fromAX: CGRect(origin: position, size: size))
+    }
+
+    private static func cocoaRect(fromAX rect: CGRect) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return PanelPlacement.cocoaRect(fromAX: rect, primaryScreenHeight: primaryHeight)
+    }
+
+    private static func onScreen(_ rect: CGRect) -> CGRect? {
+        NSScreen.screens.contains { $0.frame.intersects(rect) } ? rect : nil
+    }
+
+    private static func rect(from value: CFTypeRef?) -> CGRect? {
+        guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        return AXValueGetValue(value as! AXValue, .cgRect, &rect) ? rect : nil
+    }
+
+    private static func point(of element: AXUIElement, _ attribute: String) -> CGPoint? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        return AXValueGetValue(value as! AXValue, .cgPoint, &point) ? point : nil
+    }
+
+    private static func size(of element: AXUIElement, _ attribute: String) -> CGSize? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        return AXValueGetValue(value as! AXValue, .cgSize, &size) ? size : nil
+    }
+
     /// 焦点是否在可输入文字的控件里（而不是网页文档、列表等）。
     static func isTextInput(_ element: AXUIElement?) -> Bool {
         guard let element, !isSecureTextElement(element) else { return false }

@@ -30,6 +30,11 @@ final class InputPanel: NSObject {
     private var seenClipboardChangeCount = NSPasteboard.general.changeCount
     private var placementSide: PanelPlacement.Side = .below
     private var contentHeight: CGFloat = 0
+    /// 选中文字/光标的位置，面板贴在它下方；取不到时用屏幕上方居中。
+    private var anchorRect: CGRect?
+    private var targetWindowFrame: CGRect?
+    /// 区分我们自己调整窗口与用户拖动（只有后者会被记住）。
+    private var isApplyingFrame = false
 
     /// 原文来源（选中文字 / 剪贴板）及是否为新内容。
     private struct Capture {
@@ -84,6 +89,8 @@ final class InputPanel: NSObject {
         }
         accessibilityTrusted = AccessibilityPermissionManager.shared.isTrusted()
         targetAllowsTextReplacement = SelectionReader.canReplaceText(in: target?.focusedElement)
+        anchorRect = SelectionReader.textBounds(in: target?.focusedElement)
+        targetWindowFrame = target.flatMap { SelectionReader.focusedWindowFrame(of: $0.app) }
 
         // 读取选区可能要向目标 App 发 ⌘C，必须在面板成为 key window 之前完成。
         captureTask?.cancel()
@@ -167,7 +174,7 @@ final class InputPanel: NSObject {
             model.load(text: capture?.text ?? "", origin: capture?.origin ?? .typed)
         }
 
-        placeNearCursor()
+        placePanel()
         panel?.orderFrontRegardless()
         panel?.makeKeyAndOrderFront(nil)
 
@@ -294,37 +301,55 @@ final class InputPanel: NSObject {
             placementSide: placementSide,
             visibleFrames: NSScreen.screens.map(\.visibleFrame)
         )
-        panel.setFrame(frame, display: true)
+        setPanelFrame(frame)
         panel.invalidateShadow()
     }
 
-    private func placeNearCursor() {
-        guard let panel, let hostingView else { return }
+    /// 位置优先级：用户拖动后记住的位置 → 贴在选中文字/光标下方 → 屏幕上方居中。
+    private func placePanel() {
+        guard let hostingView else { return }
         hostingView.layoutSubtreeIfNeeded()
         let ideal = hostingView.intrinsicContentSize
         if ideal.height > 0, ideal.height != NSView.noIntrinsicMetric {
             contentHeight = ceil(ideal.height)
         }
         let size = CGSize(width: PanelView.width, height: max(contentHeight, 120))
-        let cursor = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) } ?? NSScreen.main
+        let reference = anchorRect.map { CGPoint(x: $0.midX, y: $0.midY) }
+            ?? targetWindowFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+            ?? NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(reference, $0.frame, false) } ?? NSScreen.main
         guard let screen else { return }
-        let result = PanelPlacement.nearCursor(
-            cursor: cursor,
-            panelSize: size,
-            visibleFrame: screen.visibleFrame
-        )
+
+        let result: PanelPlacement.Result
+        let method: String
+        if let origin = Config.pinnedPanelOrigin(forDisplay: screen.displayKey) {
+            result = PanelPlacement.pinned(topLeft: origin, panelSize: size, visibleFrame: screen.visibleFrame)
+            method = "记住的位置"
+        } else if let anchorRect {
+            result = PanelPlacement.anchored(below: anchorRect, panelSize: size, visibleFrame: screen.visibleFrame)
+            method = "贴近文字"
+        } else {
+            result = PanelPlacement.topCenter(panelSize: size, visibleFrame: screen.visibleFrame)
+            method = "屏幕上方居中"
+        }
         placementSide = result.side
-        panel.setFrame(result.frame, display: true)
+        setPanelFrame(result.frame)
+        Log.flow.notice("place: \(method, privacy: .public) side=\(result.side == .below ? "below" : "above", privacy: .public)")
+    }
+
+    private func setPanelFrame(_ frame: CGRect) {
+        guard let panel else { return }
+        isApplyingFrame = true
+        panel.setFrame(frame, display: true)
+        isApplyingFrame = false
     }
 
     @objc private func screenParametersChanged() {
         guard let panel, panel.isVisible else { return }
-        let frame = PanelPlacement.fit(
+        setPanelFrame(PanelPlacement.fit(
             panel.frame,
             toBestOf: NSScreen.screens.map(\.visibleFrame)
-        )
-        panel.setFrame(frame, display: true)
+        ))
     }
 
     // MARK: - 粘贴 / 复制
@@ -382,6 +407,24 @@ extension InputPanel: NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         guard panel?.isVisible == true else { return }
         dismiss()
+    }
+
+    /// 用户拖动面板：记住这块屏幕上的位置，之后都出现在这里（菜单栏可重置）。
+    func windowDidMove(_ notification: Notification) {
+        guard !isApplyingFrame, let panel, panel.isVisible, let screen = panel.screen else { return }
+        placementSide = .below
+        Config.setPinnedPanelOrigin(
+            CGPoint(x: panel.frame.minX, y: panel.frame.maxY),
+            forDisplay: screen.displayKey
+        )
+    }
+}
+
+private extension NSScreen {
+    /// 显示器的稳定标识，用来按屏幕记住面板位置。
+    var displayKey: String {
+        let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        return number.map { "\($0.uint32Value)" } ?? localizedName
     }
 }
 
