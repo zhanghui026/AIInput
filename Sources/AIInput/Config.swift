@@ -11,6 +11,11 @@ enum Config {
         static let apiKey = "apiKey"
         static let baseUrl = "baseUrl"
         static let model = "model"
+        static let panelMode = "panelMode"
+        static let direction = "translationDirection"
+        static let tone = "writingTone"
+        static let includeSummary = "includeSummary"
+        static let autoPaste = "autoPaste"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -73,6 +78,34 @@ enum Config {
             return v.isEmpty ? "MiniMax-M3" : v
         }
         set { defaults.set(newValue, forKey: Keys.model) }
+    }
+
+    // MARK: - 面板偏好（重启后保留）
+
+    static var panelMode: PanelMode {
+        get { defaults.string(forKey: Keys.panelMode).flatMap(PanelMode.init) ?? .translate }
+        set { defaults.set(newValue.rawValue, forKey: Keys.panelMode) }
+    }
+
+    static var direction: TranslationDirection {
+        get { defaults.string(forKey: Keys.direction).flatMap(TranslationDirection.init) ?? .auto }
+        set { defaults.set(newValue.rawValue, forKey: Keys.direction) }
+    }
+
+    static var tone: WritingTone {
+        get { defaults.string(forKey: Keys.tone).flatMap(WritingTone.init) ?? .faithful }
+        set { defaults.set(newValue.rawValue, forKey: Keys.tone) }
+    }
+
+    static var includeSummary: Bool {
+        get { defaults.object(forKey: Keys.includeSummary) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.includeSummary) }
+    }
+
+    /// 文本任务完成后跳过预览、直接粘贴（旧行为）。默认关闭：先预览再粘贴。
+    static var autoPaste: Bool {
+        get { defaults.bool(forKey: Keys.autoPaste) }
+        set { defaults.set(newValue, forKey: Keys.autoPaste) }
     }
 
     static var isConfigured: Bool {

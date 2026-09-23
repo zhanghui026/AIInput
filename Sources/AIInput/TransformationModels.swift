@@ -16,6 +16,70 @@ enum TransformMode: String, CaseIterable, Sendable {
     }
 }
 
+/// 面板上可选的任务。翻译的具体方向由 `TranslationDirection` 决定。
+enum PanelMode: String, CaseIterable, Sendable {
+    case translate
+    case polish
+    case webPage
+
+    var displayName: String {
+        switch self {
+        case .translate: return "翻译"
+        case .polish: return "润色"
+        case .webPage: return "网页"
+        }
+    }
+}
+
+enum TranslationDirection: String, CaseIterable, Sendable {
+    case auto
+    case zhToEnglish
+    case englishToChinese
+
+    var displayName: String {
+        switch self {
+        case .auto: return "自动"
+        case .zhToEnglish: return "中→英"
+        case .englishToChinese: return "英→中"
+        }
+    }
+}
+
+/// 把面板选项和输入内容解析成实际执行的任务。
+enum ModeResolver {
+    static func resolve(panelMode: PanelMode,
+                        direction: TranslationDirection,
+                        text: String) -> TransformMode {
+        if panelMode == .webPage || isSingleURL(text) {
+            return .webPage
+        }
+        switch panelMode {
+        case .polish:
+            return .polish
+        case .translate, .webPage:
+            switch direction {
+            case .zhToEnglish: return .zhToEnglish
+            case .englishToChinese: return .englishToChinese
+            case .auto: return LanguageDirectionDetector.resolvedMode(for: text)
+            }
+        }
+    }
+
+    /// 整段输入恰好是一个 http(s) 链接。
+    static func isSingleURL(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+}
+
 enum WritingTone: String, CaseIterable, Sendable {
     case faithful
     case concise
@@ -64,6 +128,15 @@ struct TransformationRequest: Equatable, Sendable {
 }
 
 enum LanguageDirectionDetector {
+    /// 总能给出方向：明显占优时用 `suggestedMode`，否则含汉字按中译英处理
+    /// （中文里夹英文术语是最常见的混排），纯拉丁/无文字按英译中。
+    static func resolvedMode(for text: String) -> TransformMode {
+        if let mode = suggestedMode(for: text) {
+            return mode
+        }
+        return text.unicodeScalars.contains { isHan($0.value) } ? .zhToEnglish : .englishToChinese
+    }
+
     static func suggestedMode(for text: String) -> TransformMode? {
         var hanCount = 0
         let textWithoutURLs = text.replacingOccurrences(
