@@ -58,7 +58,7 @@ struct CardChip: View {
     }
 
     private var label: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             Text(title)
             if let detail, !detail.isEmpty {
                 Text("（\(detail)）")
@@ -291,13 +291,15 @@ struct CardBlocksView: View {
                 .foregroundColor(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    if let tag = sense.tag, !tag.isEmpty {
-                        Text("（\(tag)）")
-                            .font(.system(size: 13.5))
-                            .foregroundColor(.orange)
+                    HStack(spacing: 0) {
+                        if let tag = sense.tag, !tag.isEmpty {
+                            Text("（\(tag)）")
+                                .font(.system(size: 13.5))
+                                .foregroundColor(.orange)
+                        }
+                        Text(sense.zh)
+                            .font(.system(size: 14, weight: .semibold))
                     }
-                    Text(sense.zh)
-                        .font(.system(size: 14, weight: .semibold))
                     if sense.ctx == true {
                         Text("本句")
                             .font(Typography.ui(10.5, weight: .semibold))

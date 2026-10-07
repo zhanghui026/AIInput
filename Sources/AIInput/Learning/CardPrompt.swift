@@ -68,7 +68,7 @@ enum CardPromptBuilder {
             2. {"type":"trans","literal":"直译","natural":"通顺的中文说法"}
             3. {"type":"teacher","en":"Two short, simple English sentences, as a friendly teacher would say.","zh":"optional one-line Chinese hint"}
             4. {"type":"usage","items":[{"scene":"debate","en":"a short example sentence"}]}  exactly 2 scenes
-            5. {"type":"pattern","skeleton":"rush to + N","variants":["rush to judgment","rush to action"],"drill":"rush to a ____"}  "drill" is a fill-in-the-blank that practises the skeleton
+            5. {"type":"pattern","skeleton":"rush to + N","variants":["rush to judgment","rush to action"],"drill":"rush to a ____"}  "drill" is a short fill-in-the-blank line with ____ in place of the key word; it must not contain the answer, an example or a hint
             6. {"type":"similar","items":["near-synonym","near-synonym"],"note":"一句话说明它们的侧重点差别"}
             7. {"type":"idioms","items":["related idiom"]}
             \(hasContext ? "If <context> is given, also emit {\"type\":\"sentence\",\"en\":\"the sentence from <context>\",\"literal\":\"直译\",\"free\":\"意译\"} right after the trans block." : "")
@@ -80,7 +80,7 @@ enum CardPromptBuilder {
             2. {"type":"trans","literal":"直译","natural":"通顺的中文"}
             3. {"type":"note","title":"语法点","text":"the key grammar or structure in one or two Chinese sentences"}
             4. {"type":"teacher","en":"Two short, simple English sentences explaining the meaning and tone.","zh":"optional one-line Chinese hint"}
-            5. {"type":"pattern","skeleton":"a reusable pattern from this sentence","variants":["another instance"],"drill":"a fill-in-the-blank using the pattern, with ____"}
+            5. {"type":"pattern","skeleton":"a reusable pattern from this sentence","variants":["another instance"],"drill":"a short fill-in-the-blank line with ____ in place of the key word, no answer or hint"}
             6. {"type":"family","items":["chip","chip"]}  3 to 5 words or phrases from the sentence worth learning
             7. {"type":"similar","items":["a paraphrase"],"note":"差别"}  optional
             """

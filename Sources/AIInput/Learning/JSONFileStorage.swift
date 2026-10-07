@@ -29,8 +29,13 @@ final class JSONFileStorage<Item: Codable & Sendable>: @unchecked Sendable {
     }
 
     func load() -> [Item] {
-        guard let url, let data = try? Data(contentsOf: url),
-              let envelope = try? JSONDecoder().decode(LossyEnvelope.self, from: data) else {
+        guard let url, let data = try? Data(contentsOf: url) else { return [] }
+        guard let envelope = try? JSONDecoder().decode(LossyEnvelope.self, from: data) else {
+            // 文件在但读不懂：挪到一边留底，否则下一次保存会把它整个覆盖掉。
+            let stamp = Int(Date().timeIntervalSince1970)
+            let aside = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent).corrupt-\(stamp)")
+            try? FileManager.default.moveItem(at: url, to: aside)
+            Log.flow.error("storage: \(url.lastPathComponent, privacy: .public) 无法解析，已另存为 \(aside.lastPathComponent, privacy: .public)")
             return []
         }
         return envelope.items.compactMap(\.value)

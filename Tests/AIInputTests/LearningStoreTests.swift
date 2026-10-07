@@ -44,6 +44,26 @@ final class LearningStoreTests: XCTestCase {
         XCTAssertEqual(store.entries.count, 1)
     }
 
+    func testSavingAPhraseKeyAsASentenceReplacesInsteadOfSilentlyKeepingTheOldKind() {
+        let store = NotebookStore(fileURL: nil)
+        store.save(target: CardTarget(text: "rush to conclusions", kind: .phrase, context: nil), blocks: blocks, appName: nil)
+        let swapped = store.save(target: CardTarget(text: "rush to conclusions", kind: .sentence, context: nil), blocks: blocks, appName: nil)
+        XCTAssertEqual(store.entries.count, 1)
+        XCTAssertEqual(store.entries.first?.kind, .sentence)
+        XCTAssertEqual(store.entries.first?.id, swapped.id)
+    }
+
+    func testUnreadableFileIsKeptAsideInsteadOfBeingOverwritten() throws {
+        let url = directory.appendingPathComponent("notebook.json")
+        try "not json at all".write(to: url, atomically: true, encoding: .utf8)
+        let store = NotebookStore(fileURL: url)
+        XCTAssertTrue(store.entries.isEmpty)
+        store.save(target: CardTarget(text: "curious", kind: .word, context: nil), blocks: blocks, appName: nil)
+        store.flush()
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertTrue(names.contains { $0.hasPrefix("notebook.json.corrupt-") }, "原文件应被另存")
+    }
+
     func testOneCorruptEntryOrBlockDoesNotLoseTheRest() throws {
         let url = directory.appendingPathComponent("notebook.json")
         let good = NotebookEntry.make(target: CardTarget(text: "curious", kind: .word, context: nil),

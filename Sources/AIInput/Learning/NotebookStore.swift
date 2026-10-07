@@ -102,11 +102,15 @@ final class NotebookStore: ObservableObject {
         entry(forKey: key) != nil
     }
 
-    /// 收进本子；同一个键已经有了就原样返回，不重复。
+    /// 收进本子；同一个键、同一类型已经有了就原样返回，不重复。
+    /// 词组和整句共用一个键，类型不同时换成新的那条。
     @discardableResult
     func save(target: CardTarget, blocks: [CardBlock], appName: String?, now: Date = Date()) -> NotebookEntry {
         let entry = NotebookEntry.make(target: target, blocks: blocks, appName: appName, now: now)
-        if let existing = self.entry(forKey: entry.key) { return existing }
+        if let existing = self.entry(forKey: entry.key) {
+            if existing.kind == entry.kind { return existing }
+            entries.removeAll { $0.key == entry.key }
+        }
         entries.insert(entry, at: 0)
         persist()
         return entry

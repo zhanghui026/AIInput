@@ -5,6 +5,8 @@ struct CardView: View {
     static let maxContentHeight: CGFloat = 380
 
     @ObservedObject var card: CardModel
+    /// 自己量内容高度再定滚动区高度：不依赖 ScrollView 在 fixedSize 下的理想尺寸。
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -15,8 +17,12 @@ struct CardView: View {
                 ScrollView {
                     blocksContent(of: target)
                         .padding(.trailing, 6)
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                        })
                 }
-                .frame(maxHeight: Self.maxContentHeight)
+                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+                .frame(height: min(max(contentHeight, 24), Self.maxContentHeight))
             }
         }
     }
@@ -187,5 +193,12 @@ struct CardView: View {
                 }
             }
         }
+    }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
