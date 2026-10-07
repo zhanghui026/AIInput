@@ -2,11 +2,14 @@ import SwiftUI
 
 /// 面板里的学习卡片（⌘I）：顶部工具栏 + 标题 + 可滚动的区块。
 struct CardView: View {
-    static let maxContentHeight: CGFloat = 380
+    static let minContentHeight: CGFloat = 220
+    static var maxContentHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 900
+        return min(max(screen * 0.55, 380), 620)
+    }
 
     @ObservedObject var card: CardModel
-    /// 自己量内容高度再定滚动区高度：不依赖 ScrollView 在 fixedSize 下的理想尺寸。
-    @State private var contentHeight: CGFloat = 0
+    @State private var dictionaryOpen = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -14,15 +17,12 @@ struct CardView: View {
             if let target = card.target {
                 CardHeadline(text: target.text, kind: target.kind, head: card.blocks.head)
                 lookupLine
-                ScrollView {
+                // 生成中先留出舒适的高度，免得一开始缩成一条、边生成边跳。
+                CappedScroll(minHeight: card.isLoading ? Self.minContentHeight : 40, maxHeight: Self.maxContentHeight) {
                     blocksContent(of: target)
                         .padding(.trailing, 6)
-                        .background(GeometryReader { proxy in
-                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
-                        })
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-                .frame(height: min(max(contentHeight, 24), Self.maxContentHeight))
             }
         }
     }
@@ -180,25 +180,74 @@ struct CardView: View {
                         .textSelection(.enabled)
                 }
             } else {
-                DisclosureGroup {
-                    Text(text)
-                        .font(.system(size: 12.5))
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 4)
-                } label: {
-                    Text("词典释义（系统词典）")
-                        .font(Typography.ui(12.5, weight: .semibold))
+                // 展开状态放在 CardView 里：可见内容和量高度用的副本要同步展开。
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        dictionaryOpen.toggle()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: dictionaryOpen ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(width: 10)
+                            Text("词典释义（系统词典）")
+                                .font(Typography.ui(12.5, weight: .semibold))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if dictionaryOpen {
+                        Text(text)
+                            .font(.system(size: 12.5))
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
     }
 }
 
-private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+/// 竖向滚动区：高度等于内容高度，夹在 [minHeight, maxHeight] 之间，内容更高时才滚动。
+/// 内容高度由 Layout 同步量出（不可见的副本），不依赖 ScrollView 在 fixedSize 父视图里的理想尺寸，
+/// 也不依赖 PreferenceKey 的异步回写。
+private struct CappedScroll<Content: View>: View {
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        CappedHeightLayout(minHeight: minHeight, maxHeight: maxHeight) {
+            ScrollView { content }
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .hidden()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct CappedHeightLayout: Layout {
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+
+    private func height(_ subviews: Subviews, width: CGFloat) -> CGFloat {
+        guard subviews.count == 2 else { return minHeight }
+        let natural = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        return min(max(natural, minHeight), maxHeight)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 600
+        return CGSize(width: width, height: height(subviews, width: width))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        subviews[0].place(at: bounds.origin, anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        subviews[1].place(at: bounds.origin, anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }

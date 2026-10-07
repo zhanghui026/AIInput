@@ -190,14 +190,17 @@ final class CardModel: ObservableObject {
         let request = CardRequest(target: target, customInstructions: preferences.customInstructions)
         let parser = CardStreamParser()
         let generator = generator
+        let order = CardPromptBuilder.order(
+            for: target.kind,
+            hasContext: !(target.context ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         task = Task { [weak self] in
             do {
                 let raw = try await generator.generate(request) { [weak self] partial in
                     guard let self, self.generation == id else { return }
-                    self.blocks += parser.update(with: partial)
+                    self.insert(parser.update(with: partial), order: order)
                 }
                 guard let self, self.generation == id else { return }
-                self.blocks += parser.update(with: raw)
+                self.insert(parser.update(with: raw), order: order)
                 self.task = nil
                 guard !self.blocks.isEmpty else {
                     self.stage = .failed("没能生成卡片，请重试。")
@@ -212,6 +215,17 @@ final class CardModel: ObservableObject {
                 Log.flow.error("card: 生成失败：\(error.localizedDescription, privacy: .public)")
                 self.stage = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    /// 几路并行生成时区块不按顺序到达：按卡片的固定顺序插入，同类型保持到达顺序。
+    private func insert(_ new: [CardBlock], order: [String]) {
+        func rank(_ block: CardBlock) -> Int {
+            order.firstIndex(of: block.typeKey) ?? order.count
+        }
+        for block in new {
+            let position = blocks.firstIndex { rank($0) > rank(block) } ?? blocks.count
+            blocks.insert(block, at: position)
         }
     }
 

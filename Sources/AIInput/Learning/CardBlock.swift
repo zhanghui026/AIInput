@@ -99,6 +99,25 @@ enum CardBlock: Equatable, Sendable {
     /// 认不出的区块类型（比如以后版本新增的），保留类型名但不显示。
     case unknown(String)
 
+    /// 模型输出里的 `type` 字段。
+    var typeKey: String {
+        switch self {
+        case .head: return "head"
+        case .senses: return "senses"
+        case .teacher: return "teacher"
+        case .usage: return "usage"
+        case .alternatives: return "alt"
+        case .sentence: return "sentence"
+        case .family: return "family"
+        case .translation: return "trans"
+        case .pattern: return "pattern"
+        case .similar: return "similar"
+        case .idioms: return "idioms"
+        case .note: return "note"
+        case .unknown(let type): return type
+        }
+    }
+
     var isEmpty: Bool {
         switch self {
         case .head(let v): return [v.lemma, v.ipa, v.pos, v.level, v.label].allSatisfy { ($0 ?? "").isEmpty }

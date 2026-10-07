@@ -68,6 +68,18 @@ final class CardModelTests: XCTestCase {
         XCTAssertEqual(generator.requests.first?.target.context, "He was curious about it.")
     }
 
+    func testBlocksArrivingOutOfOrderAreShownInCardOrder() async throws {
+        generator.defaultOutput = """
+        {"type":"family","items":["observer"]}
+        {"type":"teacher","en":"It means wanting to know."}
+        {"type":"head","lemma":"curious","level":"B1"}
+        {"type":"senses","items":[{"zh":"好奇的"}]}
+        """
+        card.open(text: "curious", context: nil)
+        try await waitFor { self.card.stage == .ready }
+        XCTAssertEqual(card.blocks.map(\.typeKey), ["head", "senses", "teacher", "family"])
+    }
+
     func testNothingToExplainForChineseText() {
         card.open(text: "好奇", context: nil)
         XCTAssertNil(card.target)
