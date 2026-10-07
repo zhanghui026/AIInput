@@ -294,6 +294,42 @@ enum SelectionReader {
         return (fullText as NSString).substring(with: nsRange)
     }
 
+    /// 选中文字所在的整句（只给单词和词组用）。一次读取全文和选区，
+    /// 不再另行查询，避免两次读到的不是同一个选区。读不到时返回 nil。
+    static func sentenceContext(in element: AXUIElement?, selected: String) -> String? {
+        guard let element, !isSecureTextElement(element) else { return nil }
+        for candidate in elementAndAncestors(startingAt: element, maximumDepth: 4) {
+            if let count = intAttribute(kAXNumberOfCharactersAttribute, of: candidate),
+               count > SentenceExtractor.maxFullTextLength {
+                continue
+            }
+            var fullValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(candidate, kAXValueAttribute as CFString, &fullValue) == .success,
+                  let fullText = fullValue as? String else {
+                continue
+            }
+            var selectedRange: NSRange?
+            var rangeValue: CFTypeRef?
+            var range = CFRange()
+            if AXUIElementCopyAttributeValue(candidate, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success,
+               let rangeValue,
+               CFGetTypeID(rangeValue) == AXValueGetTypeID(),
+               AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) {
+                selectedRange = NSRange(location: range.location, length: range.length)
+            }
+            if let sentence = SentenceExtractor.sentence(in: fullText, selectedRange: selectedRange, selected: selected) {
+                return sentence
+            }
+        }
+        return nil
+    }
+
+    private static func intAttribute(_ attribute: String, of element: AXUIElement) -> Int? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return (value as? NSNumber)?.intValue
+    }
+
     static func canReplaceText(in element: AXUIElement?) -> Bool {
         guard let element else { return true }
         if isTextInput(element) {

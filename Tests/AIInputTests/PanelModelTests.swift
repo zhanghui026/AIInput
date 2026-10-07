@@ -200,6 +200,7 @@ final class InMemoryPreferences: PanelPreferences {
     var favoriteTones: [WritingTone] = Config.defaultFavoriteTones
     var customInstructions = ""
     var historyEnabled = true
+    var lookupLogEnabled = true
 }
 
 final class FakeTransformer: TextTransforming, @unchecked Sendable {

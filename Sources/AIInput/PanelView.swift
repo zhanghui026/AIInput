@@ -36,12 +36,14 @@ struct PanelView: View {
     @ObservedObject var model: PanelModel
     @ObservedObject var toneBoard: ToneBoard
     @ObservedObject var history: HistoryStore
+    @ObservedObject var card: CardModel
     let actions: PanelActions
 
     init(model: PanelModel, actions: PanelActions) {
         self.model = model
         self.toneBoard = model.toneBoard
         self.history = model.history
+        self.card = model.card
         self.actions = actions
     }
 
@@ -62,6 +64,10 @@ struct PanelView: View {
 
     private var inHistory: Bool {
         model.viewMode == .history
+    }
+
+    private var inCardView: Bool {
+        model.viewMode == .card
     }
 
     var body: some View {
@@ -117,7 +123,10 @@ struct PanelView: View {
             } else {
                 sourceHeader
             }
-            if model.panelMode == .translate {
+            if model.canShowCard || inCardView {
+                cardSwitch
+            }
+            if model.panelMode == .translate, model.cardKind != .word || inToneView {
                 viewSwitch
             }
             modeToggle
@@ -133,11 +142,11 @@ struct PanelView: View {
             .font(Typography.ui(12))
             .foregroundColor(.secondary)
             .lineLimit(1)
-        if model.panelMode == .translate {
+        if model.panelMode == .translate, !inCardView {
             directionMenu
         }
         Spacer(minLength: 8)
-        if model.versions.count > 1, !inToneView {
+        if model.versions.count > 1, !inToneView, !inCardView {
             versionStepper
         }
     }
@@ -212,6 +221,30 @@ struct PanelView: View {
         .help("切换版本（⌘[ / ⌘]）")
     }
 
+    private var cardSwitch: some View {
+        let name = model.cardKind?.cardName ?? card.target?.kind.cardName ?? "卡片"
+        return Button(action: model.toggleCard) {
+            HStack(spacing: 6) {
+                Text("翻译")
+                    .fontWeight(inCardView ? .regular : .semibold)
+                    .foregroundColor(inCardView ? .secondary : .primary)
+                Text(name)
+                    .fontWeight(inCardView ? .semibold : .regular)
+                    .foregroundColor(inCardView ? .primary : .secondary)
+                Keycap("⌘I")
+            }
+            .font(Typography.ui(12.5))
+            .padding(.leading, 11)
+            .padding(.trailing, 6)
+            .padding(.vertical, 4)
+            .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("i", modifiers: .command)
+        .help("查看这个词或句子的学习卡片（⌘I）：释义、用法、句型，还能收进生词本")
+    }
+
     private var viewSwitch: some View {
         Button(action: model.toggleToneView) {
             HStack(spacing: 6) {
@@ -266,7 +299,9 @@ struct PanelView: View {
 
     @ViewBuilder
     private var content: some View {
-        if inHistory {
+        if inCardView {
+            CardView(card: card)
+        } else if inHistory {
             HistoryView(
                 history: history,
                 selectedIndex: model.historyIndex,
@@ -531,6 +566,16 @@ struct PanelView: View {
                 HintButton(key: "⏎", title: "载入", action: model.loadHistorySelection)
                 HintButton(key: "⌘Y", title: "返回", action: model.toggleHistory)
                 HintButton(key: "esc", title: "关闭", action: actions.close)
+            } else if inCardView {
+                if !card.trail.isEmpty {
+                    HintButton(key: "⌘[", title: "上一张", action: card.pop)
+                }
+                if card.stage != .ready, card.stage != .loading, card.stage != .idle {
+                    HintButton(key: "⌘R", title: "重试", action: card.retry)
+                        .keyboardShortcut("r", modifiers: .command)
+                }
+                HintButton(key: "⌘I", title: "回到翻译", action: model.toggleCard)
+                HintButton(key: "esc", title: "关闭", action: actions.close)
             } else if inToneView {
                 Text("⌘1–4 选中")
                     .font(Typography.ui(12))
@@ -569,6 +614,9 @@ struct PanelView: View {
     }
 
     private var primaryTitle: String {
+        if inCardView {
+            return "回到翻译"
+        }
         if inHistory {
             guard model.selectedHistoryEntry != nil else { return "暂无历史" }
             guard model.target.canPaste else { return "复制" }
@@ -674,7 +722,7 @@ private struct Chip: View {
     }
 }
 
-private struct HintButton: View {
+struct HintButton: View {
     let key: String
     let title: String
     let action: () -> Void

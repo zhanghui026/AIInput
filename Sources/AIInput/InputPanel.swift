@@ -15,11 +15,17 @@ final class InputPanel: NSObject {
 
     private var panel: KeyablePanel?
     private var hostingView: SizeReportingHostingView?
-    private let model = PanelModel(
-        transformer: TranslationService(),
-        preferences: ConfigPreferences(),
-        history: HistoryStore()
-    )
+    private let model: PanelModel = {
+        let service = TranslationService()
+        return PanelModel(
+            transformer: service,
+            preferences: ConfigPreferences(),
+            history: HistoryStore(),
+            cardGenerator: service,
+            notebook: LearningStores.shared.notebook,
+            lookups: LearningStores.shared.lookups
+        )
+    }()
     private let injector = Injector()
     private weak var sourceEditor: NSTextView?
 
@@ -46,6 +52,8 @@ final class InputPanel: NSObject {
         let origin: PanelModel.Origin
         /// 选中文字，或上次唤起后新复制到剪贴板的内容。
         let isFresh: Bool
+        /// 选中的单词/词组所在的整句，词卡用。
+        var context: String?
     }
 
     private override init() {
@@ -148,7 +156,11 @@ final class InputPanel: NSObject {
             switch state {
             case .text(let text):
                 Log.flow.notice("capture: 辅助功能读到选中文字（\(text.count) 字）")
-                return Capture(text: text, origin: .selection, isFresh: true)
+                var context: String?
+                if let kind = SelectionClassifier.kind(for: text), kind != .sentence {
+                    context = SelectionReader.sentenceContext(in: target.focusedElement, selected: text)
+                }
+                return Capture(text: text, origin: .selection, isFresh: true, context: context)
             case .none:
                 break
             case .unknown:
@@ -178,7 +190,7 @@ final class InputPanel: NSObject {
         if !startsNewSession, retainedRecently, hasSessionContent {
             Log.flow.notice("show: 恢复上次现场")
         } else {
-            model.load(text: capture?.text ?? "", origin: capture?.origin ?? .typed)
+            model.load(text: capture?.text ?? "", origin: capture?.origin ?? .typed, context: capture?.context)
         }
 
         placePanel()
@@ -384,6 +396,8 @@ final class InputPanel: NSObject {
         case .copy(let text):
             model.noteUsed(text)
             copy(text)
+        case .closeCard:
+            model.toggleCard()
         }
     }
 

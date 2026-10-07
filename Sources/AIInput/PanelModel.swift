@@ -17,6 +17,11 @@ protocol PanelPreferences: AnyObject {
     var favoriteTones: [WritingTone] { get }
     var customInstructions: String { get }
     var historyEnabled: Bool { get }
+    var lookupLogEnabled: Bool { get }
+}
+
+extension PanelPreferences {
+    var lookupLogEnabled: Bool { true }
 }
 
 @MainActor
@@ -36,6 +41,7 @@ final class ConfigPreferences: PanelPreferences {
     var favoriteTones: [WritingTone] { Config.favoriteTones }
     var customInstructions: String { Config.customInstructions }
     var historyEnabled: Bool { Config.historyEnabled }
+    var lookupLogEnabled: Bool { Config.lookupLogEnabled }
 }
 
 /// 面板的全部状态与操作，不依赖 AppKit，便于单测。
@@ -74,6 +80,7 @@ final class PanelModel: ObservableObject {
         case single
         case tones
         case history
+        case card
     }
 
     enum PrimaryAction: Equatable {
@@ -81,6 +88,8 @@ final class PanelModel: ObservableObject {
         case submit
         case paste(String)
         case copy(String)
+        /// 卡片视图里 ⌘⏎：回到翻译结果。
+        case closeCard
     }
 
     @Published private(set) var stage: Stage = .idle
@@ -99,6 +108,9 @@ final class PanelModel: ObservableObject {
     /// 润色结果是否标出修订痕迹（⌘D 切换）。
     @Published private(set) var showsRevisions = true
     let toneBoard: ToneBoard
+    let card: CardModel
+    /// 原文里选中文字所在的整句（只有从选区读到时才有）。
+    private(set) var sourceContext: String?
     @Published var target = Target()
     /// 底栏的临时提示（例如“未能自动粘贴”），开始新一轮或新请求时清除。
     @Published var notice: String?
@@ -116,11 +128,20 @@ final class PanelModel: ObservableObject {
 
     init(transformer: TextTransforming,
          preferences: PanelPreferences,
-         history: HistoryStore? = nil) {
+         history: HistoryStore? = nil,
+         cardGenerator: CardGenerating? = nil,
+         notebook: NotebookStore? = nil,
+         lookups: LookupLog? = nil) {
         self.transformer = transformer
         self.preferences = preferences
         self.history = history ?? HistoryStore(fileURL: nil)
         toneBoard = ToneBoard(transformer: transformer, preferences: preferences)
+        card = CardModel(
+            generator: cardGenerator ?? (transformer as? CardGenerating) ?? UnavailableCardGenerator(),
+            preferences: preferences,
+            notebook: notebook ?? NotebookStore(fileURL: nil),
+            lookups: lookups ?? LookupLog(fileURL: nil)
+        )
         panelMode = preferences.panelMode
         direction = preferences.direction
         tone = preferences.tone
@@ -160,9 +181,11 @@ final class PanelModel: ObservableObject {
     // MARK: - 原文
 
     /// 开始新一轮：载入带进来的原文（或清空），丢弃旧结果。
-    func load(text: String, origin: Origin) {
+    func load(text: String, origin: Origin, context: String? = nil) {
         cancelRequest()
         toneBoard.reset()
+        card.reset()
+        sourceContext = text.isEmpty ? nil : context
         viewMode = .single
         notice = nil
         sourceText = text
@@ -177,7 +200,9 @@ final class PanelModel: ObservableObject {
     func editSource(_ text: String) {
         guard text != sourceText else { return }
         sourceText = text
+        sourceContext = nil
         toneBoard.reset()
+        card.reset()
         viewMode = .single
         if text.isEmpty {
             origin = .typed
@@ -222,6 +247,10 @@ final class PanelModel: ObservableObject {
             toneBoard.reset()
             viewMode = .single
         }
+        if mode != .translate, viewMode == .card {
+            card.cancelRunning()
+            viewMode = .single
+        }
         rerunIfNeeded()
     }
 
@@ -253,8 +282,9 @@ final class PanelModel: ObservableObject {
     /// 打开或关闭多语气视图；关闭时把选中的那张卡片作为新版本带回单个视图。
     func toggleToneView() {
         switch viewMode {
-        case .single, .history:
+        case .single, .history, .card:
             guard canShowToneView else { return }
+            if viewMode == .card { card.cancelRunning() }
             viewMode = .tones
             openToneBoard()
         case .tones:
@@ -273,6 +303,9 @@ final class PanelModel: ObservableObject {
         }
         if viewMode == .tones {
             toneBoard.cancelRunning()
+        }
+        if viewMode == .card {
+            card.cancelRunning()
         }
         historyIndex = 0
         viewMode = .history
@@ -297,6 +330,8 @@ final class PanelModel: ObservableObject {
         guard let entry = selectedHistoryEntry else { return }
         cancelRequest()
         toneBoard.reset()
+        card.reset()
+        sourceContext = nil
         sourceText = entry.source
         versions = [Version(text: entry.result, mode: entry.mode, tone: entry.tone)]
         versionIndex = 0
@@ -316,6 +351,8 @@ final class PanelModel: ObservableObject {
             history.record(source: entry.source, result: text, mode: entry.mode,
                            tone: entry.tone, appName: target.appName)
             return
+        case .card:
+            return
         case .tones:
             mode = resolvedMode
             usedTone = toneBoard.chosen ?? tone
@@ -324,6 +361,37 @@ final class PanelModel: ObservableObject {
             usedTone = currentVersion?.tone ?? tone
         }
         history.record(source: sourceText, result: text, mode: mode, tone: usedTone, appName: target.appName)
+    }
+
+    // MARK: - 学习卡片（⌘I）
+
+    /// 原文是英文单词、词组或句子时才有卡片；类型自动判断。
+    var cardKind: CardKind? {
+        SelectionClassifier.kind(for: sourceText)
+    }
+
+    var canShowCard: Bool {
+        hasSource && cardKind != nil
+    }
+
+    func toggleCard() {
+        if viewMode == .card {
+            card.cancelRunning()
+            viewMode = .single
+            return
+        }
+        guard canShowCard else { return }
+        if viewMode == .tones {
+            toneBoard.cancelRunning()
+        }
+        viewMode = .card
+        let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        card.appName = target.appName
+        if card.trail.isEmpty, card.target?.text == text {
+            card.resume()
+        } else {
+            card.open(text: text, context: sourceContext)
+        }
     }
 
     private func openToneBoard() {
@@ -459,6 +527,9 @@ final class PanelModel: ObservableObject {
     // MARK: - 主按钮 ⌘⏎
 
     func primaryAction() -> PrimaryAction {
+        if viewMode == .card {
+            return .closeCard
+        }
         if viewMode == .history {
             guard let text = selectedHistoryEntry?.result else { return .none }
             return target.canPaste ? .paste(text) : .copy(text)
@@ -477,5 +548,14 @@ final class PanelModel: ObservableObject {
             guard !text.isEmpty else { return .none }
             return target.canPaste ? .paste(text) : .copy(text)
         }
+    }
+}
+
+
+/// 没有接入卡片服务时（例如只测面板逻辑）使用，调用就报未配置。
+struct UnavailableCardGenerator: CardGenerating {
+    func generate(_ request: CardRequest,
+                  onPartial: TranslationService.PartialHandler?) async throws -> String {
+        throw TranslationService.TranslationError.notConfigured
     }
 }

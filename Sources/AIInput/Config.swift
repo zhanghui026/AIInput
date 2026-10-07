@@ -19,6 +19,7 @@ enum Config {
         static let favoriteTones = "favoriteTones"
         static let pinnedPanelOrigins = "pinnedPanelOrigins"
         static let historyEnabled = "historyEnabled"
+        static let lookupLogEnabled = "lookupLogEnabled"
         static let hotkey = "hotkey"
     }
 
@@ -159,6 +160,12 @@ enum Config {
     static var historyEnabled: Bool {
         get { defaults.object(forKey: Keys.historyEnabled) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.historyEnabled) }
+    }
+
+    /// 是否自动记录打开过的学习卡片（「第 N 次查」和学习统计的依据）。
+    static var lookupLogEnabled: Bool {
+        get { defaults.object(forKey: Keys.lookupLogEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.lookupLogEnabled) }
     }
 
     /// 个人要求 / 术语表，追加到每次请求的系统提示。

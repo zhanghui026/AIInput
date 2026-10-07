@@ -67,7 +67,15 @@ final class TranslationService: @unchecked Sendable {
         return try await stream(TransformationPromptBuilder.make(for: request), onPartial: onPartial)
     }
 
+    /// 流式取回模型的原始输出，不做引号清洗（卡片的 JSON 不能被清洗改动）。
+    func performRaw(_ prompt: TransformationPrompt,
+                    onPartial: PartialHandler? = nil) async throws -> String {
+        try Task.checkCancellation()
+        return try await stream(prompt, cleansOutput: false, onPartial: onPartial)
+    }
+
     private func stream(_ prompt: TransformationPrompt,
+                        cleansOutput: Bool = true,
                         onPartial: PartialHandler?) async throws -> String {
         try await withRetry { progress in
             let request = try self.makeRequest(for: prompt, stream: true)
@@ -132,7 +140,9 @@ final class TranslationService: @unchecked Sendable {
             }
             try Task.checkCancellation()
 
-            let cleaned = Self.clean(text, source: prompt.sourceText)
+            let cleaned = cleansOutput
+                ? Self.clean(text, source: prompt.sourceText)
+                : text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else {
                 throw TranslationError.decode
             }
