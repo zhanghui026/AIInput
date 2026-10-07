@@ -22,6 +22,7 @@ final class SettingsWindowController: NSWindowController {
         let view = SettingsView(
             settings: settings,
             history: InputPanel.shared.history,
+            lookups: LearningStores.shared.lookups,
             onResetPosition: { [weak self] in
                 Config.clearPinnedPanelOrigins()
                 self?.settings.notice = "面板位置已重置"

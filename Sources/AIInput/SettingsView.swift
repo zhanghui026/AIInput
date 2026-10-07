@@ -19,6 +19,7 @@ final class SettingsModel: ObservableObject {
     @Published var customInstructions = ""
     @Published var autoPaste = false
     @Published var historyEnabled = true
+    @Published var lookupLogEnabled = true
     @Published var connection: ConnectionStatus = .idle
     @Published var hotkeyError: String?
     @Published var notice: String?
@@ -34,6 +35,7 @@ final class SettingsModel: ObservableObject {
         customInstructions = Config.customInstructions
         autoPaste = Config.autoPaste
         historyEnabled = Config.historyEnabled
+        lookupLogEnabled = Config.lookupLogEnabled
         connection = .idle
         hotkeyError = nil
         notice = nil
@@ -52,6 +54,7 @@ final class SettingsModel: ObservableObject {
         Config.customInstructions = customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.autoPaste = autoPaste
         Config.historyEnabled = historyEnabled
+        Config.lookupLogEnabled = lookupLogEnabled
         return true
     }
 
@@ -86,6 +89,7 @@ final class SettingsModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var settings: SettingsModel
     @ObservedObject var history: HistoryStore
+    @ObservedObject var lookups: LookupLog
     let onResetPosition: () -> Void
     let onCancel: () -> Void
     let onSave: () -> Void
@@ -227,14 +231,19 @@ struct SettingsView: View {
         Section {
             Toggle("结果生成后直接粘贴（跳过预览）", isOn: $settings.autoPaste)
             Toggle("记录用过的结果（⌘Y 历史，仅保存在本机）", isOn: $settings.historyEnabled)
+            Toggle("记录打开过的学习卡片（「第 N 次查」和学习统计）", isOn: $settings.lookupLogEnabled)
             HStack {
                 Button("清空历史（\(history.entries.count) 条）", action: history.clear)
                     .disabled(history.entries.isEmpty)
+                Button("清空查词记录（\(lookups.records.count) 条）", action: lookups.clear)
+                    .disabled(lookups.records.isEmpty)
                 Button("重置面板位置", action: onResetPosition)
                     .help("忘记拖动过的位置，面板重新贴在文字下方或屏幕上方居中")
             }
         } header: {
             Text("使用习惯")
+        } footer: {
+            Text("查词记录和生词本只存在本机 ~/Library/Application Support/AIInput（仅你可读）。收进生词本时会连同选中文字所在的那一句一起保存，用来出复习题。")
         }
     }
 }

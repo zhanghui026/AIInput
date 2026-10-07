@@ -2,7 +2,7 @@ import Cocoa
 import ApplicationServices
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let accessibilityGuideShownKey = "accessibilityGuideShown.v1"
 
     private var statusItem: NSStatusItem?
@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var accessibilityActionItem: NSMenuItem?
     private var toggleItem: NSMenuItem?
     private var settingsController: SettingsWindowController?
+    private var learningController: LearningWindowController?
+    private var learningItem: NSMenuItem?
     private let accessibilityPermission = AccessibilityPermissionManager.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -45,9 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityActionItem = permissionActionItem
 
         menu.addItem(.separator())
+        learningItem = menu.addItem(withTitle: "学习与复习…", action: #selector(openLearning), keyEquivalent: "l")
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
+        menu.delegate = self
         item.menu = menu
         statusItem = item
 
@@ -112,6 +116,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         settingsController?.show()
+    }
+
+    @objc private func openLearning() {
+        if learningController == nil {
+            learningController = LearningWindowController()
+        }
+        learningController?.show()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let due = LearningStores.shared.notebook.dueCount()
+        learningItem?.title = due > 0 ? "学习与复习（\(due) 个待复习）…" : "学习与复习…"
     }
 
     @objc private func quit() {
