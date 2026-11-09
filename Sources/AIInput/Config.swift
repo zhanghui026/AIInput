@@ -21,6 +21,8 @@ enum Config {
         static let historyEnabled = "historyEnabled"
         static let lookupLogEnabled = "lookupLogEnabled"
         static let hotkey = "hotkey"
+        static let fallbackCLI = "fallbackCLI"
+        static let fallbackModel = "fallbackModel"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -94,6 +96,22 @@ enum Config {
             return v.isEmpty ? "MiniMax-M3" : v
         }
         set { defaults.set(newValue, forKey: Keys.model) }
+    }
+
+    /// 主服务失败时改用的本机 CLI；nil 表示不用备用。
+    static var fallbackCLI: FallbackCLI? {
+        get { defaults.string(forKey: Keys.fallbackCLI).flatMap(FallbackCLI.init) }
+        set { defaults.set(newValue?.rawValue, forKey: Keys.fallbackCLI) }
+    }
+
+    /// 备用 CLI 的模型；留空用该 CLI 自己的默认模型。
+    static var fallbackModel: String {
+        get { defaults.string(forKey: Keys.fallbackModel) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.fallbackModel) }
+    }
+
+    static var fallback: FallbackConfig {
+        FallbackConfig(cli: fallbackCLI, model: fallbackModel)
     }
 
     // MARK: - 面板偏好（重启后保留）

@@ -21,10 +21,14 @@ final class SettingsModel: ObservableObject {
     @Published var historyEnabled = true
     @Published var lookupLogEnabled = true
     @Published var connection: ConnectionStatus = .idle
+    @Published var fallbackCLI: FallbackCLI?
+    @Published var fallbackModel = ""
+    @Published var fallbackConnection: ConnectionStatus = .idle
     @Published var hotkeyError: String?
     @Published var notice: String?
 
     private var connectionTask: Task<Void, Never>?
+    private var fallbackTask: Task<Void, Never>?
 
     func load() {
         apiKey = Config.apiKey
@@ -36,7 +40,10 @@ final class SettingsModel: ObservableObject {
         autoPaste = Config.autoPaste
         historyEnabled = Config.historyEnabled
         lookupLogEnabled = Config.lookupLogEnabled
+        fallbackCLI = Config.fallbackCLI
+        fallbackModel = Config.fallbackModel
         connection = .idle
+        fallbackConnection = .idle
         hotkeyError = nil
         notice = nil
     }
@@ -50,6 +57,8 @@ final class SettingsModel: ObservableObject {
         Config.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.baseUrl = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        Config.fallbackCLI = fallbackCLI
+        Config.fallbackModel = fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.favoriteTones = favoriteTones
         Config.customInstructions = customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.autoPaste = autoPaste
@@ -71,7 +80,7 @@ final class SettingsModel: ObservableObject {
             baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
             model: model.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        let service = TranslationService(config: { config }, retryDelays: [])
+        let service = TranslationService(config: { config }, retryDelays: [], fallback: nil)
         let started = Date()
         connectionTask = Task { [weak self] in
             do {
@@ -81,6 +90,32 @@ final class SettingsModel: ObservableObject {
                 return
             } catch {
                 self?.connection = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// 直接用备用 CLI 跑一次很短的润色，不经过主服务。
+    func testFallback() {
+        fallbackTask?.cancel()
+        let config = FallbackConfig(
+            cli: fallbackCLI,
+            model: fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        guard config.cli != nil else { return }
+        fallbackConnection = .testing
+        let fallback = CLIFallback(config: { config })
+        let started = Date()
+        fallbackTask = Task { [weak self] in
+            do {
+                let prompt = try TransformationPromptBuilder.make(
+                    for: TransformationRequest(mode: .polish, tone: .faithful, text: "Hello.")
+                )
+                _ = try await fallback.run(prompt)
+                self?.fallbackConnection = .ok(Date().timeIntervalSince(started))
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.fallbackConnection = .failed(error.localizedDescription)
             }
         }
     }
@@ -98,6 +133,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 serviceSection
+                fallbackSection
                 hotkeySection
                 tonesSection
                 instructionsSection
@@ -141,9 +177,37 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
+    private var fallbackSection: some View {
+        Section {
+            Picker("备用 CLI", selection: $settings.fallbackCLI) {
+                Text("不使用").tag(FallbackCLI?.none)
+                ForEach(FallbackCLI.allCases, id: \.self) { cli in
+                    Text(cli.displayName).tag(FallbackCLI?.some(cli))
+                }
+            }
+            .onChange(of: settings.fallbackCLI) { _ in settings.fallbackConnection = .idle }
+            if settings.fallbackCLI != nil {
+                TextField("模型", text: $settings.fallbackModel, prompt: Text("留空用 CLI 的默认模型"))
+                HStack(spacing: 10) {
+                    Button("测试备用", action: settings.testFallback)
+                        .disabled(settings.fallbackConnection == .testing)
+                    statusLabel(settings.fallbackConnection)
+                }
+            }
+        } header: {
+            Text("备用")
+        } footer: {
+            Text("主服务失败或未配置时，改用本机已登录的 codex / droid / agy 非交互模式生成（只读、在空的临时目录里运行，不流式，通常要 5–30 秒）。")
+        }
+    }
+
     private var connectionLabel: some View {
-        switch settings.connection {
+        statusLabel(settings.connection)
+    }
+
+    @ViewBuilder
+    private func statusLabel(_ status: SettingsModel.ConnectionStatus) -> some View {
+        switch status {
         case .idle:
             EmptyView()
         case .testing:

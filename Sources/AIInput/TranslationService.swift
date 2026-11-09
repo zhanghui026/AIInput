@@ -9,6 +9,7 @@ final class TranslationService: @unchecked Sendable {
         case decode
         case outputTruncated
         case transport(Error)
+        case fallbackFailed(primary: Error, fallback: Error)
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +35,8 @@ final class TranslationService: @unchecked Sendable {
                 return "模型输出达到长度上限，未返回完整内容。请缩短输入后重试。"
             case .transport(let error):
                 return "网络错误：\(error.localizedDescription)"
+            case .fallbackFailed(let primary, let fallback):
+                return "\(primary.localizedDescription)\n备用也失败：\(fallback.localizedDescription)"
             }
         }
     }
@@ -50,13 +53,16 @@ final class TranslationService: @unchecked Sendable {
     private let session: URLSession
     private let config: @Sendable () -> ServiceConfig
     private let retryDelays: [TimeInterval]
+    private let fallback: TextFallback?
 
     init(session: URLSession = .shared,
          config: @escaping @Sendable () -> ServiceConfig = { Config.service },
-         retryDelays: [TimeInterval] = TranslationService.defaultRetryDelays) {
+         retryDelays: [TimeInterval] = TranslationService.defaultRetryDelays,
+         fallback: TextFallback? = CLIFallback()) {
         self.session = session
         self.config = config
         self.retryDelays = retryDelays
+        self.fallback = fallback
     }
 
     /// 执行一次转换并流式返回：`onPartial` 随每个增量收到累计文本，
@@ -74,9 +80,47 @@ final class TranslationService: @unchecked Sendable {
         return try await stream(prompt, cleansOutput: false, onPartial: onPartial)
     }
 
+    /// 主服务失败（含未配置）且还没向界面输出文字时，改用备用 CLI 一次性取回结果；
+    /// 两边都失败时报告两边的原因。
     private func stream(_ prompt: TransformationPrompt,
                         cleansOutput: Bool = true,
                         onPartial: PartialHandler?) async throws -> String {
+        let shown = StreamProgress()
+        do {
+            return try await streamPrimary(prompt, cleansOutput: cleansOutput, shown: shown, onPartial: onPartial)
+        } catch {
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
+            guard !shown.started, let fallback, fallback.isEnabled else {
+                throw error
+            }
+            Log.flow.notice("request: 主服务失败，改用备用 CLI：\(error.localizedDescription, privacy: .public)")
+            let text: String
+            do {
+                text = try await fallback.run(prompt)
+            } catch let fallbackError {
+                if fallbackError is CancellationError || Task.isCancelled {
+                    throw CancellationError()
+                }
+                throw TranslationError.fallbackFailed(primary: error, fallback: fallbackError)
+            }
+            try Task.checkCancellation()
+            let cleaned = cleansOutput ? Self.clean(text, source: prompt.sourceText) : text
+            guard !cleaned.isEmpty else {
+                throw TranslationError.decode
+            }
+            if let onPartial {
+                await onPartial(cleaned)
+            }
+            return cleaned
+        }
+    }
+
+    private func streamPrimary(_ prompt: TransformationPrompt,
+                               cleansOutput: Bool,
+                               shown: StreamProgress,
+                               onPartial: PartialHandler?) async throws -> String {
         try await withRetry { progress in
             let request = try self.makeRequest(for: prompt, stream: true)
             let started = Date()
@@ -121,6 +165,7 @@ final class TranslationService: @unchecked Sendable {
                         text += delta
                         if !text.isEmpty {
                             progress.started = true
+                            shown.started = true
                         }
                         if let onPartial {
                             await onPartial(text)
