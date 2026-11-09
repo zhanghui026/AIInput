@@ -58,7 +58,7 @@ final class TranslationService: @unchecked Sendable {
     init(session: URLSession = .shared,
          config: @escaping @Sendable () -> ServiceConfig = { Config.service },
          retryDelays: [TimeInterval] = TranslationService.defaultRetryDelays,
-         fallback: TextFallback? = CLIFallback()) {
+         fallback: TextFallback? = DroidFallback()) {
         self.session = session
         self.config = config
         self.retryDelays = retryDelays
@@ -80,7 +80,7 @@ final class TranslationService: @unchecked Sendable {
         return try await stream(prompt, cleansOutput: false, onPartial: onPartial)
     }
 
-    /// 主服务失败（含未配置）且还没向界面输出文字时，改用备用 CLI 一次性取回结果；
+    /// 主服务失败（含未配置）且还没向界面输出文字时，改用备用 droid 一次性取回结果；
     /// 两边都失败时报告两边的原因。
     private func stream(_ prompt: TransformationPrompt,
                         cleansOutput: Bool = true,
@@ -95,7 +95,7 @@ final class TranslationService: @unchecked Sendable {
             guard !shown.started, let fallback, fallback.isEnabled else {
                 throw error
             }
-            Log.flow.notice("request: 主服务失败，改用备用 CLI：\(error.localizedDescription, privacy: .public)")
+            Log.flow.notice("request: 主服务失败，改用备用 droid：\(error.localizedDescription, privacy: .public)")
             let text: String
             do {
                 text = try await fallback.run(prompt)

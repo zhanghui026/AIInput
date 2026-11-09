@@ -1,79 +1,44 @@
 import Foundation
 
-/// 主模型服务失败时改用的本机 Agent CLI。
-enum FallbackCLI: String, CaseIterable, Sendable {
-    case codex
-    case droid
-    case agy
-
-    var displayName: String {
-        switch self {
-        case .codex: return "Codex"
-        case .droid: return "Droid"
-        case .agy: return "agy"
-        }
-    }
-
-    /// 非交互、只读、不落会话的一次性调用参数。各家默认都会给 Agent 工具权限，
-    /// 这里尽量收窄：codex 只读沙箱；droid 不加 --auto 即只读；agy 不跳过权限确认。
-    func arguments(prompt: String, model: String) -> [String] {
-        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch self {
-        case .codex:
-            var args = ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never"]
-            if !model.isEmpty { args += ["-m", model] }
-            return args + [prompt]
-        case .droid:
-            var args = ["exec"]
-            if !model.isEmpty { args += ["-m", model] }
-            return args + [prompt]
-        case .agy:
-            var args = ["-p", prompt, "--disable-slash-commands"]
-            if !model.isEmpty { args += ["--model", model] }
-            return args
-        }
-    }
-}
-
-/// 备用 CLI 配置快照；`cli == nil` 表示不使用备用。
+/// 备用配置快照：主服务失败时是否改用本机 droid，以及它用的模型（留空用默认）。
 struct FallbackConfig: Sendable, Equatable {
-    let cli: FallbackCLI?
+    let enabled: Bool
     let model: String
 
-    static let disabled = FallbackConfig(cli: nil, model: "")
+    static let disabled = FallbackConfig(enabled: false, model: "")
 }
 
-/// 主服务失败后的备用通道（生产环境是 `CLIFallback`，测试里可替换）。
+/// 主服务失败后的备用通道（生产环境是 `DroidFallback`，测试里可替换）。
 protocol TextFallback: Sendable {
     /// 当前是否启用；未启用时直接报告主服务的错误。
     var isEnabled: Bool { get }
     func run(_ prompt: TransformationPrompt) async throws -> String
 }
 
-/// 通过本机 codex / droid / agy 的非交互模式完成一次转换。
-struct CLIFallback: TextFallback {
-    enum CLIError: LocalizedError {
-        case notFound(FallbackCLI)
-        case failed(FallbackCLI, Int32, String)
-        case timedOut(FallbackCLI)
-        case emptyOutput(FallbackCLI)
+/// 通过本机 `droid exec` 的非交互模式完成一次转换。
+struct DroidFallback: TextFallback {
+    enum DroidError: LocalizedError {
+        case notFound
+        case failed(Int32, String)
+        case timedOut
+        case emptyOutput
 
         var errorDescription: String? {
             switch self {
-            case .notFound(let cli):
-                return "找不到 \(cli.rawValue) 命令，请确认已安装并在登录 shell 的 PATH 里。"
-            case .failed(let cli, let status, let message):
+            case .notFound:
+                return "找不到 droid 命令，请确认已安装并在登录 shell 的 PATH 里。"
+            case .failed(let status, let message):
                 let detail = message.isEmpty ? "" : "：\(message)"
-                return "\(cli.displayName) 退出码 \(status)\(detail)"
-            case .timedOut(let cli):
-                return "\(cli.displayName) 超时未返回（可能需要先在终端里登录一次）。"
-            case .emptyOutput(let cli):
-                return "\(cli.displayName) 没有返回内容。"
+                return "Droid 退出码 \(status)\(detail)"
+            case .timedOut:
+                return "Droid 超时未返回（可能需要先在终端里登录一次）。"
+            case .emptyOutput:
+                return "Droid 没有返回内容。"
             }
         }
     }
 
-    /// Agent CLI 冷启动慢，比直连接口宽限得多。
+/// Agent CLI 冷启动慢，比直连接口宽限得多。
     static let timeout: TimeInterval = 120
 
     let config: @Sendable () -> FallbackConfig
@@ -82,41 +47,49 @@ struct CLIFallback: TextFallback {
         self.config = config
     }
 
-    var isEnabled: Bool { config().cli != nil }
+    var isEnabled: Bool { config().enabled }
 
     func run(_ prompt: TransformationPrompt) async throws -> String {
         let config = config()
-        guard let cli = config.cli else {
+        guard config.enabled else {
             throw TranslationService.TranslationError.notConfigured
         }
         let environment = await ShellEnvironment.shared.value()
-        guard let executable = ShellEnvironment.locate(cli.rawValue, in: environment) else {
-            throw CLIError.notFound(cli)
+        guard let executable = ShellEnvironment.locate("droid", in: environment) else {
+            throw DroidError.notFound
         }
-        Log.flow.notice("fallback: \(cli.rawValue, privacy: .public) model=\(config.model, privacy: .public)")
+        Log.flow.notice("fallback: droid model=\(config.model, privacy: .public)")
         let started = Date()
         let result = try await ProcessRunner.run(
             executable: executable,
-            arguments: cli.arguments(prompt: Self.combine(prompt), model: config.model),
+            arguments: Self.arguments(prompt: Self.combine(prompt), model: config.model),
             environment: environment,
             timeout: min(max(prompt.timeout, Self.timeout), 300)
         )
         if result.timedOut {
-            throw CLIError.timedOut(cli)
+            throw DroidError.timedOut
         }
         guard result.status == 0 else {
-            throw CLIError.failed(cli, result.status, Self.lastLine(of: result.stderr))
+            throw DroidError.failed(result.status, Self.lastLine(of: result.stderr))
         }
         let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty else {
-            throw CLIError.emptyOutput(cli)
+            throw DroidError.emptyOutput
         }
         let elapsed = Date().timeIntervalSince(started)
         Log.flow.notice("fallback: 完成 \(elapsed, format: .fixed(precision: 1))s")
         return output
     }
 
-    /// CLI 只收一段提示词：把系统提示放前面，并要求它别动用工具。
+    /// 一次性调用参数。不加 --auto 时 droid exec 只读，不会改动文件或跑命令。
+    static func arguments(prompt: String, model: String) -> [String] {
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        var args = ["exec"]
+        if !model.isEmpty { args += ["-m", model] }
+        return args + [prompt]
+    }
+
+    /// droid 只收一段提示词：把系统提示放前面，并要求它别动用工具。
     static func combine(_ prompt: TransformationPrompt) -> String {
         """
         \(prompt.system)
@@ -209,13 +182,13 @@ enum ProcessRunner {
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
-        // 空的临时目录：CLI 看不到任何项目文件。
+        // 空的临时目录：子进程看不到任何项目文件。
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
-        // 不接 stdin：codex 等会一直等 stdin 读完。
+        // 不接 stdin，免得子进程一直等输入。
         process.standardInput = FileHandle.nullDevice
 
         let state = RunState()

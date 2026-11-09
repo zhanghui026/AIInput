@@ -1,33 +1,17 @@
 import XCTest
 @testable import AIInput
 
-final class FallbackCLIArgumentsTests: XCTestCase {
-    func testCodexRunsReadOnlyEphemeralWithOptionalModel() {
-        XCTAssertEqual(
-            FallbackCLI.codex.arguments(prompt: "P", model: ""),
-            ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "P"]
-        )
-        XCTAssertEqual(
-            FallbackCLI.codex.arguments(prompt: "P", model: " gpt-x ").suffix(3),
-            ["-m", "gpt-x", "P"]
-        )
-    }
-
-    func testDroidAndAgyPassModelWithTheirOwnFlags() {
-        XCTAssertEqual(FallbackCLI.droid.arguments(prompt: "P", model: ""), ["exec", "P"])
-        XCTAssertEqual(FallbackCLI.droid.arguments(prompt: "P", model: "m1"), ["exec", "-m", "m1", "P"])
-        XCTAssertEqual(FallbackCLI.agy.arguments(prompt: "P", model: ""), ["-p", "P", "--disable-slash-commands"])
-        XCTAssertEqual(
-            FallbackCLI.agy.arguments(prompt: "P", model: "m2"),
-            ["-p", "P", "--disable-slash-commands", "--model", "m2"]
-        )
+final class DroidFallbackTests: XCTestCase {
+    func testDroidRunsExecWithOptionalModel() {
+        XCTAssertEqual(DroidFallback.arguments(prompt: "P", model: ""), ["exec", "P"])
+        XCTAssertEqual(DroidFallback.arguments(prompt: "P", model: " m1 "), ["exec", "-m", "m1", "P"])
     }
 
     func testCombinedPromptKeepsSystemThenSource() throws {
         let prompt = try TransformationPromptBuilder.make(
             for: TransformationRequest(mode: .zhToEnglish, tone: .faithful, text: "你好")
         )
-        let combined = CLIFallback.combine(prompt)
+        let combined = DroidFallback.combine(prompt)
         let system = try XCTUnwrap(combined.range(of: prompt.system))
         let user = try XCTUnwrap(combined.range(of: prompt.user))
         XCTAssertLessThan(system.lowerBound, user.lowerBound)
@@ -103,7 +87,7 @@ final class ServiceFallbackTests: XCTestCase {
 
     func testReportsBothErrorsWhenFallbackAlsoFails() async {
         StubURLProtocol.enqueue(status: 401, body: Data(#"{"error":{"message":"bad key"}}"#.utf8))
-        let fallback = StubFallback(result: .failure(CLIFallback.CLIError.notFound(.codex)))
+        let fallback = StubFallback(result: .failure(DroidFallback.DroidError.notFound))
 
         do {
             _ = try await makeService(fallback: fallback).perform(
@@ -112,7 +96,7 @@ final class ServiceFallbackTests: XCTestCase {
             XCTFail("expected failure")
         } catch {
             XCTAssertTrue(error.localizedDescription.hasPrefix("API Key 无效或无权限（401）"))
-            XCTAssertTrue(error.localizedDescription.contains("备用也失败：找不到 codex 命令"))
+            XCTAssertTrue(error.localizedDescription.contains("备用也失败：找不到 droid 命令"))
         }
     }
 

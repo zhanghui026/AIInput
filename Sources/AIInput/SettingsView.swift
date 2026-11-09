@@ -21,7 +21,7 @@ final class SettingsModel: ObservableObject {
     @Published var historyEnabled = true
     @Published var lookupLogEnabled = true
     @Published var connection: ConnectionStatus = .idle
-    @Published var fallbackCLI: FallbackCLI?
+    @Published var fallbackEnabled = false
     @Published var fallbackModel = ""
     @Published var fallbackConnection: ConnectionStatus = .idle
     @Published var hotkeyError: String?
@@ -40,7 +40,7 @@ final class SettingsModel: ObservableObject {
         autoPaste = Config.autoPaste
         historyEnabled = Config.historyEnabled
         lookupLogEnabled = Config.lookupLogEnabled
-        fallbackCLI = Config.fallbackCLI
+        fallbackEnabled = Config.fallbackEnabled
         fallbackModel = Config.fallbackModel
         connection = .idle
         fallbackConnection = .idle
@@ -57,7 +57,7 @@ final class SettingsModel: ObservableObject {
         Config.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.baseUrl = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        Config.fallbackCLI = fallbackCLI
+        Config.fallbackEnabled = fallbackEnabled
         Config.fallbackModel = fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.favoriteTones = favoriteTones
         Config.customInstructions = customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,16 +94,15 @@ final class SettingsModel: ObservableObject {
         }
     }
 
-    /// 直接用备用 CLI 跑一次很短的润色，不经过主服务。
+    /// 直接用 droid 跑一次很短的润色，不经过主服务。
     func testFallback() {
         fallbackTask?.cancel()
         let config = FallbackConfig(
-            cli: fallbackCLI,
+            enabled: true,
             model: fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        guard config.cli != nil else { return }
         fallbackConnection = .testing
-        let fallback = CLIFallback(config: { config })
+        let fallback = DroidFallback(config: { config })
         let started = Date()
         fallbackTask = Task { [weak self] in
             do {
@@ -179,15 +178,9 @@ struct SettingsView: View {
 
     private var fallbackSection: some View {
         Section {
-            Picker("备用 CLI", selection: $settings.fallbackCLI) {
-                Text("不使用").tag(FallbackCLI?.none)
-                ForEach(FallbackCLI.allCases, id: \.self) { cli in
-                    Text(cli.displayName).tag(FallbackCLI?.some(cli))
-                }
-            }
-            .onChange(of: settings.fallbackCLI) { _ in settings.fallbackConnection = .idle }
-            if settings.fallbackCLI != nil {
-                TextField("模型", text: $settings.fallbackModel, prompt: Text("留空用 CLI 的默认模型"))
+            Toggle("主服务失败时改用 Droid", isOn: $settings.fallbackEnabled)
+            if settings.fallbackEnabled {
+                TextField("模型", text: $settings.fallbackModel, prompt: Text("留空用 droid 的默认模型"))
                 HStack(spacing: 10) {
                     Button("测试备用", action: settings.testFallback)
                         .disabled(settings.fallbackConnection == .testing)
@@ -197,7 +190,7 @@ struct SettingsView: View {
         } header: {
             Text("备用")
         } footer: {
-            Text("主服务失败或未配置时，改用本机已登录的 codex / droid / agy 非交互模式生成（只读、在空的临时目录里运行，不流式，通常要 5–30 秒）。")
+            Text("主服务失败或未配置时，改用本机已登录的 droid exec 生成（只读、在空的临时目录里运行，不流式，通常要 5–30 秒）。")
         }
     }
 
