@@ -21,8 +21,8 @@ enum Config {
         static let historyEnabled = "historyEnabled"
         static let lookupLogEnabled = "lookupLogEnabled"
         static let hotkey = "hotkey"
-        static let backupEnabled = "droidFallbackEnabled"
-        static let backupModel = "fallbackModel"
+        static let backupEnabled = "backupEnabled"
+        static let backupModel = "backupModel"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -96,6 +96,19 @@ enum Config {
             return v.isEmpty ? "MiniMax-M3" : v
         }
         set { defaults.set(newValue, forKey: Keys.model) }
+    }
+
+    /// 备用设置以前存在 `droidFallbackEnabled` / `fallbackModel` 下。启动时搬到新键名
+    /// （新键已有值就以新键为准），然后删掉旧键。
+    static func migrateLegacyBackupKeys(in defaults: UserDefaults = .standard) {
+        let renames = ["droidFallbackEnabled": Keys.backupEnabled, "fallbackModel": Keys.backupModel]
+        for (old, new) in renames {
+            guard let value = defaults.object(forKey: old) else { continue }
+            if defaults.object(forKey: new) == nil {
+                defaults.set(value, forKey: new)
+            }
+            defaults.removeObject(forKey: old)
+        }
     }
 
     /// 主服务失败时是否改用本机 droid。

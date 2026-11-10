@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 命令在响应链中的来源。
         installMainMenu()
         Config.migrateLegacyAPIKey()
+        Config.migrateLegacyBackupKeys()
 
         // 菜单栏图标
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

@@ -44,3 +44,45 @@ final class FavoriteTonePickerTests: XCTestCase {
         XCTAssertEqual(FavoriteTones.toggle(.faithful, in: [.faithful]), [.faithful])
     }
 }
+
+final class BackupKeyMigrationTests: XCTestCase {
+    private var suiteName = ""
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        suiteName = "AIInputTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testMovesOldKeysToTheNewNames() {
+        defaults.set(true, forKey: "droidFallbackEnabled")
+        defaults.set("m1", forKey: "fallbackModel")
+
+        Config.migrateLegacyBackupKeys(in: defaults)
+
+        XCTAssertTrue(defaults.bool(forKey: "backupEnabled"))
+        XCTAssertEqual(defaults.string(forKey: "backupModel"), "m1")
+        XCTAssertNil(defaults.object(forKey: "droidFallbackEnabled"))
+        XCTAssertNil(defaults.object(forKey: "fallbackModel"))
+    }
+
+    func testKeepsValuesAlreadySavedUnderTheNewNames() {
+        defaults.set(true, forKey: "droidFallbackEnabled")
+        defaults.set(false, forKey: "backupEnabled")
+
+        Config.migrateLegacyBackupKeys(in: defaults)
+
+        XCTAssertFalse(defaults.bool(forKey: "backupEnabled"))
+        XCTAssertNil(defaults.object(forKey: "droidFallbackEnabled"))
+    }
+
+    func testDoesNothingWithoutOldKeys() {
+        Config.migrateLegacyBackupKeys(in: defaults)
+        XCTAssertNil(defaults.object(forKey: "backupEnabled"))
+        XCTAssertNil(defaults.object(forKey: "backupModel"))
+    }
+}
