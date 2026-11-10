@@ -6,8 +6,6 @@ cd "$(dirname "$0")"
 
 APP_NAME="AIInput"
 BUNDLE_ID="com.zhanghui.aiinput"
-BUILD_DIR=".build"
-RELEASE_BIN="$BUILD_DIR/release/AIInput"
 APP_BUNDLE="$APP_NAME.app"
 DEVELOPMENT_MARKER_KEY="AIInputDevelopmentSignatureMarker"
 DEVELOPMENT_MARKER_VALUE="com.zhanghui.aiinput.local-development.v1"
@@ -45,6 +43,8 @@ build_app() {
     echo "==> swift build -c release"
     swift build -c release
 
+    # 产物位置随工具链的构建系统而变（.build/release 或 .build/out/Products/Release），问 SwiftPM 要。
+    RELEASE_BIN="$(swift build -c release --show-bin-path)/$APP_NAME"
     if [ ! -f "$RELEASE_BIN" ]; then
         echo "构建产物未找到: $RELEASE_BIN" >&2
         exit 1
