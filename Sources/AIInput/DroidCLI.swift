@@ -70,7 +70,7 @@ struct DroidCLI: TextBackend {
             throw DroidError.timedOut
         }
         guard result.status == 0 else {
-            throw DroidError.failed(result.status, Self.lastLine(of: result.stderr))
+            throw DroidError.failed(result.status, Self.errorSummary(from: result.stderr))
         }
         let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty else {
@@ -100,10 +100,13 @@ struct DroidCLI: TextBackend {
         """
     }
 
-    private static func lastLine(of text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline)
+    /// 从 droid 的 stderr 里挑一句给用户看。真正的原因在最前面（例如 "Invalid model: x"，
+    /// 后面跟着一长串可用模型和提示）；以 "[exec] " 开头的是它自己的配置提示，不算。
+    static func errorSummary(from stderr: String) -> String {
+        let lines = stderr.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .last(where: { !$0.isEmpty }) ?? ""
+            .filter { !$0.isEmpty }
+        let line = lines.first(where: { !$0.hasPrefix("[exec] ") }) ?? lines.last ?? ""
         return String(line.prefix(200))
     }
 }
@@ -113,18 +116,37 @@ struct DroidCLI: TextBackend {
 actor ShellEnvironment {
     static let shared = ShellEnvironment()
 
-    private var cached: [String: String]?
+    struct Loaded: Sendable {
+        let environment: [String: String]
+        /// 是否真的从登录 shell 取到了；没取到时只是兜底值，下次再试。
+        let fromShell: Bool
+    }
 
+    private let loader: @Sendable () async -> Loaded
+    private var cached: [String: String]?
+    private var loading: Task<Loaded, Never>?
+
+    init(loader: @escaping @Sendable () async -> Loaded = ShellEnvironment.load) {
+        self.loader = loader
+    }
+
+    /// 同时到来的调用共用一次加载（卡片是两路并行请求）；加载失败的结果不缓存。
     func value() async -> [String: String] {
         if let cached { return cached }
-        let loaded = await Self.load()
-        cached = loaded
-        return loaded
+        if let loading { return await loading.value.environment }
+        let loader = loader
+        let task = Task { await loader() }
+        loading = task
+        let loaded = await task.value
+        loading = nil
+        if loaded.fromShell { cached = loaded.environment }
+        return loaded.environment
     }
 
     private static let marker = "__AIINPUT_ENV__"
 
-    private static func load() async -> [String: String] {
+    @Sendable
+    private static func load() async -> Loaded {
         var base = ProcessInfo.processInfo.environment
         let shell = base["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
         // 启动脚本可能往 stdout 打印东西，用标记把 env 的输出圈出来。
@@ -135,9 +157,11 @@ actor ShellEnvironment {
             environment: base,
             timeout: 10
         )
+        var fromShell = false
         if let stdout = result?.stdout {
             let parts = stdout.components(separatedBy: marker)
             if parts.count >= 3 {
+                fromShell = true
                 for entry in parts[1].split(separator: "\0") {
                     guard let eq = entry.firstIndex(of: "=") else { continue }
                     base[String(entry[..<eq])] = String(entry[entry.index(after: eq)...])
@@ -149,7 +173,10 @@ actor ShellEnvironment {
             let extra = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
             base["PATH"] = (extra + [base["PATH"] ?? "/usr/bin:/bin"]).joined(separator: ":")
         }
-        return base
+        if !fromShell {
+            Log.flow.error("backup: 没能从登录 shell 取到环境变量，这次用兜底的 PATH")
+        }
+        return Loaded(environment: base, fromShell: fromShell)
     }
 
     /// 在 PATH 里找可执行文件。

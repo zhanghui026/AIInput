@@ -18,6 +18,57 @@ final class DroidCLITests: XCTestCase {
         XCTAssertTrue(combined.contains("Do not run commands"))
     }
 
+    func testErrorSummaryPicksTheCauseNotTheTrailingHints() {
+        let invalidModel = """
+        Invalid model: no-such-model
+
+        Available built-in models:
+          auto, a, b
+
+        No custom models configured. Add them to ~/.factory/settings.json
+        """
+        XCTAssertEqual(DroidCLI.errorSummary(from: invalidModel), "Invalid model: no-such-model")
+
+        let withNotice = "[exec] Ignoring hook settings entry: x\nNot logged in\n"
+        XCTAssertEqual(DroidCLI.errorSummary(from: withNotice), "Not logged in")
+
+        XCTAssertEqual(DroidCLI.errorSummary(from: "[exec] Ignoring hook settings entry: x\n"),
+                       "[exec] Ignoring hook settings entry: x")
+        XCTAssertEqual(DroidCLI.errorSummary(from: ""), "")
+    }
+
+    func testShellEnvironmentSharesOneLoadBetweenConcurrentCallers() async {
+        let counter = LoadCounter()
+        let environment = ShellEnvironment {
+            await counter.increment()
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            return .init(environment: ["PATH": "/bin"], fromShell: true)
+        }
+        async let first = environment.value()
+        async let second = environment.value()
+        let values = await [first, second]
+        XCTAssertEqual(values, [["PATH": "/bin"], ["PATH": "/bin"]])
+        _ = await environment.value()
+        let loads = await counter.value
+        XCTAssertEqual(loads, 1)
+    }
+
+    func testShellEnvironmentRetriesAfterAFailedLoad() async {
+        let counter = LoadCounter()
+        let environment = ShellEnvironment {
+            let attempt = await counter.increment()
+            return .init(environment: ["PATH": "/try\(attempt)"], fromShell: attempt > 1)
+        }
+        let first = await environment.value()
+        let second = await environment.value()
+        let third = await environment.value()
+        XCTAssertEqual(first["PATH"], "/try1")
+        XCTAssertEqual(second["PATH"], "/try2")
+        XCTAssertEqual(third["PATH"], "/try2")
+        let loads = await counter.value
+        XCTAssertEqual(loads, 2)
+    }
+
     func testLocateFindsExecutableOnPath() {
         let found = ShellEnvironment.locate("sh", in: ["PATH": "/nonexistent:/bin"])
         XCTAssertEqual(found?.path, "/bin/sh")
@@ -284,5 +335,15 @@ private final class StubBackend: TextBackend, @unchecked Sendable {
         count += 1
         lock.unlock()
         return try result.get()
+    }
+}
+
+private actor LoadCounter {
+    private(set) var value = 0
+
+    @discardableResult
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }
