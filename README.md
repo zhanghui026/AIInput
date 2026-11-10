@@ -83,7 +83,7 @@ AIINPUT_SIGN_IDENTITY="<证书 SHA-1>" ./script/package_dmg.sh
    - **Base URL**：`https://api.minimaxi.com/anthropic/v1`（MiniMax 的 Anthropic 兼容端点）
    - **模型**：`MiniMax-M3`
    - **API Key**：只保存在 `~/.aiinput/key`（权限 600），在设置里填写也是写入这个文件。旧版本存在偏好设置里的明文副本会在启动时迁移并删除。可点「测试连接」确认配置可用。
-   - **备用**（可选）：打开「主服务失败时改用 Droid」，模型留空即用 droid 的默认模型。主服务失败（或没配 key）且还没输出文字时，改用 `droid exec` 生成一次（只读、在空的临时目录里运行、不流式，通常 5–10 秒）。droid 需先在终端里登录过；App 会从登录 shell 取 PATH，所以 `~/.local/bin` 里的 droid 也能找到。可点「测试备用」确认。
+   - **备用**（可选）：打开「主服务失败时改用 Droid」，模型留空即用 droid 的默认模型。主服务没配 key、连不上、被限流、服务端出错或 key 失效，且还没输出文字时，改用 `droid exec` 生成一次（只读、在每次新建的空临时目录里运行、不流式，通常 5–30 秒）。Base URL 写错、请求被拒（400/404 等）这类需要你改配置的错误不会走备用，会直接显示出来。droid 需先在终端里登录过；App 会从登录 shell 取 PATH，所以 `~/.local/bin` 里的 droid 也能找到。可点「测试备用」确认。
 5. 在 Notes / Safari / VS Code / 任意输入框里按 `Ctrl+⌥+⌘+E`，输入内容后按 `Cmd+Return`。结果流式出现在预览区，确认后再按 `Cmd+Return` 粘贴；`⌘R` 重来，`⇧⌘C` 复制。
 
 **首次运行（包括从 DMG 安装到「应用程序」后）需要授权一次辅助功能**；之后用同一方式重新构建不会丢失授权。未授权时面板底栏会提示，此时只能用剪贴板作为原文、结果需手动粘贴。同一时间只会保留最新启动的一个 AIInput 实例。
