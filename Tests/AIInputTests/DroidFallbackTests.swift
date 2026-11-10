@@ -46,6 +46,52 @@ final class DroidFallbackTests: XCTestCase {
         )
         XCTAssertTrue(result.timedOut)
     }
+
+    func testProcessRunnerUsesItsOwnEmptyDirectoryAndRemovesIt() async throws {
+        let result = try await ProcessRunner.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "pwd -P; ls -A | wc -l"],
+            environment: ["PATH": "/bin:/usr/bin"],
+            timeout: 5
+        )
+        let lines = result.stdout.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(lines.count, 2)
+        // /var 是 /private/var 的符号链接，只比较目录名。
+        XCTAssertTrue(URL(fileURLWithPath: lines[0]).lastPathComponent.hasPrefix("AIInput-run-"))
+        XCTAssertEqual(lines[1], "0")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lines[0]))
+    }
+
+    /// 子进程忽略 SIGTERM，且它留下的孙进程一直握着输出管道：仍然要按时返回。
+    func testProcessRunnerKillsProcessThatIgnoresTerminate() async throws {
+        let started = Date()
+        let result = try await ProcessRunner.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "trap '' TERM; sleep 10"],
+            environment: ["PATH": "/bin:/usr/bin"],
+            timeout: 0.2,
+            killGrace: 0.2,
+            drainGrace: 0.2
+        )
+        XCTAssertTrue(result.timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    /// 子进程已退出，但后台孙进程还握着管道：不等它，拿已有输出返回。
+    func testProcessRunnerDoesNotWaitForLingeringGrandchild() async throws {
+        let started = Date()
+        let result = try await ProcessRunner.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "sleep 10 & echo hi"],
+            environment: ["PATH": "/bin:/usr/bin"],
+            timeout: 8,
+            drainGrace: 0.3
+        )
+        XCTAssertEqual(result.stdout, "hi\n")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
 }
 
 final class ServiceFallbackTests: XCTestCase {

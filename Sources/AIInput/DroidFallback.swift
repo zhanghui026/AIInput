@@ -174,16 +174,27 @@ enum ProcessRunner {
         let timedOut: Bool
     }
 
+    /// - Parameters:
+    ///   - killGrace: 发出 SIGTERM 后等这么久，还没退出就 SIGKILL。
+    ///   - drainGrace: 子进程退出后最多再等这么久收尾输出；它留下的后台进程可能一直握着管道。
     static func run(executable: URL,
                     arguments: [String],
                     environment: [String: String],
-                    timeout: TimeInterval) async throws -> Result {
+                    timeout: TimeInterval,
+                    killGrace: TimeInterval = 2,
+                    drainGrace: TimeInterval = 1) async throws -> Result {
+        // 每次新建一个专用的空目录：子进程看不到任何别的文件（共享的临时目录里有其他 App 的东西）。
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AIInput-run-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
-        // 空的临时目录：子进程看不到任何项目文件。
-        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        process.currentDirectoryURL = directory
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
@@ -191,52 +202,66 @@ enum ProcessRunner {
         // 不接 stdin，免得子进程一直等输入。
         process.standardInput = FileHandle.nullDevice
 
-        let state = RunState()
+        let state = RunState(process: process, killGrace: killGrace)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Result, Error>) in
-                let group = DispatchGroup()
-                var outData = Data()
-                var errData = Data()
-                group.enter()
-                DispatchQueue.global().async {
-                    outData = stdout.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-                group.enter()
-                DispatchQueue.global().async {
-                    errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-                group.enter()
-                process.terminationHandler = { _ in group.leave() }
-
-                do {
-                    try process.run()
-                } catch {
-                    try? stdout.fileHandleForWriting.close()
-                    try? stderr.fileHandleForWriting.close()
-                    continuation.resume(throwing: error)
-                    return
-                }
-                state.started(process)
-
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                    if process.isRunning {
-                        state.markTimedOut()
-                        process.terminate()
-                    }
-                }
-                group.notify(queue: .global()) {
+                let outHandle = stdout.fileHandleForReading
+                let errHandle = stderr.fileHandleForReading
+                let finish: @Sendable () -> Void = {
+                    guard let collected = state.finish() else { return }
+                    outHandle.readabilityHandler = nil
+                    errHandle.readabilityHandler = nil
                     if state.isCancelled {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
                     continuation.resume(returning: Result(
                         status: process.terminationStatus,
-                        stdout: String(decoding: outData, as: UTF8.self),
-                        stderr: String(decoding: errData, as: UTF8.self),
+                        stdout: String(decoding: collected.out, as: UTF8.self),
+                        stderr: String(decoding: collected.err, as: UTF8.self),
                         timedOut: state.timedOut
                     ))
+                }
+                // 三件事都完成（两路输出读到头、进程退出）就收尾。
+                let partDone: @Sendable () -> Void = {
+                    if state.partDone() { finish() }
+                }
+                outHandle.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if data.isEmpty {
+                        handle.readabilityHandler = nil
+                        partDone()
+                    } else {
+                        state.append(out: data)
+                    }
+                }
+                errHandle.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if data.isEmpty {
+                        handle.readabilityHandler = nil
+                        partDone()
+                    } else {
+                        state.append(err: data)
+                    }
+                }
+                process.terminationHandler = { _ in
+                    partDone()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + drainGrace, execute: finish)
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    outHandle.readabilityHandler = nil
+                    errHandle.readabilityHandler = nil
+                    _ = state.finish()
+                    continuation.resume(throwing: error)
+                    return
+                }
+                state.started()
+
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    state.timeOut()
                 }
             }
         } onCancel: {
@@ -247,9 +272,20 @@ enum ProcessRunner {
 
 private final class RunState: @unchecked Sendable {
     private let lock = NSLock()
-    private var process: Process?
+    private let process: Process
+    private let killGrace: TimeInterval
+    private var running = false
     private var cancelled = false
     private var didTimeOut = false
+    private var finished = false
+    private var pendingParts = 3
+    private var out = Data()
+    private var err = Data()
+
+    init(process: Process, killGrace: TimeInterval) {
+        self.process = process
+        self.killGrace = killGrace
+    }
 
     private func locked<T>(_ body: () -> T) -> T {
         lock.lock(); defer { lock.unlock() }
@@ -259,21 +295,60 @@ private final class RunState: @unchecked Sendable {
     var isCancelled: Bool { locked { cancelled } }
     var timedOut: Bool { locked { didTimeOut } }
 
-    func started(_ process: Process) {
-        let alreadyCancelled = locked {
-            self.process = process
-            return cancelled
+    func append(out data: Data) { locked { out.append(data) } }
+    func append(err data: Data) { locked { err.append(data) } }
+
+    /// 返回 true 表示三件事都完成了。
+    func partDone() -> Bool {
+        locked {
+            pendingParts -= 1
+            return pendingParts == 0
         }
-        if alreadyCancelled { process.terminate() }
     }
 
-    func markTimedOut() { locked { didTimeOut = true } }
+    /// 只有第一次调用拿得到输出，保证 continuation 只恢复一次。
+    func finish() -> (out: Data, err: Data)? {
+        locked {
+            guard !finished else { return nil }
+            finished = true
+            return (out, err)
+        }
+    }
+
+    func started() {
+        let alreadyCancelled = locked {
+            running = true
+            return cancelled
+        }
+        if alreadyCancelled { stop() }
+    }
+
+    func timeOut() {
+        let shouldStop = locked {
+            guard running, !finished, process.isRunning else { return false }
+            didTimeOut = true
+            return true
+        }
+        if shouldStop { stop() }
+    }
 
     func cancel() {
-        let process = locked {
+        let shouldStop = locked {
             cancelled = true
-            return self.process
+            return running
         }
-        if let process, process.isRunning { process.terminate() }
+        if shouldStop { stop() }
+    }
+
+    /// 先 SIGTERM；宽限期后还在跑（忽略了信号）就 SIGKILL。
+    private func stop() {
+        guard process.isRunning else { return }
+        process.terminate()
+        let process = process
+        DispatchQueue.global().asyncAfter(deadline: .now() + killGrace) {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
     }
 }
