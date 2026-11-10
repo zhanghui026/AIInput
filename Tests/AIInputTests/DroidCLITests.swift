@@ -1,17 +1,17 @@
 import XCTest
 @testable import AIInput
 
-final class DroidFallbackTests: XCTestCase {
+final class DroidCLITests: XCTestCase {
     func testDroidRunsExecWithOptionalModel() {
-        XCTAssertEqual(DroidFallback.arguments(prompt: "P", model: ""), ["exec", "P"])
-        XCTAssertEqual(DroidFallback.arguments(prompt: "P", model: " m1 "), ["exec", "-m", "m1", "P"])
+        XCTAssertEqual(DroidCLI.arguments(prompt: "P", model: ""), ["exec", "P"])
+        XCTAssertEqual(DroidCLI.arguments(prompt: "P", model: " m1 "), ["exec", "-m", "m1", "P"])
     }
 
     func testCombinedPromptKeepsSystemThenSource() throws {
         let prompt = try TransformationPromptBuilder.make(
             for: TransformationRequest(mode: .zhToEnglish, tone: .faithful, text: "你好")
         )
-        let combined = DroidFallback.combine(prompt)
+        let combined = DroidCLI.combine(prompt)
         let system = try XCTUnwrap(combined.range(of: prompt.system))
         let user = try XCTUnwrap(combined.range(of: prompt.user))
         XCTAssertLessThan(system.lowerBound, user.lowerBound)
@@ -94,7 +94,7 @@ final class DroidFallbackTests: XCTestCase {
     }
 }
 
-final class ServiceFallbackTests: XCTestCase {
+final class ServiceBackupTests: XCTestCase {
     override func tearDown() {
         StubURLProtocol.reset()
         super.tearDown()
@@ -103,26 +103,26 @@ final class ServiceFallbackTests: XCTestCase {
     @MainActor
     func testFallsBackWhenPrimaryFailsBeforeAnyOutput() async throws {
         StubURLProtocol.enqueue(status: 401, body: Data(#"{"error":{"message":"bad key"}}"#.utf8))
-        let fallback = StubFallback(result: .success("\u{201C}From CLI\u{201D}"))
+        let backup = StubBackend(result: .success("\u{201C}From CLI\u{201D}"))
         let partials = Recorder()
 
-        let result = try await makeService(fallback: fallback).perform(
+        let result = try await makeService(backup: backup).perform(
             TransformationRequest(mode: .zhToEnglish, tone: .faithful, text: "来自 CLI"),
             onPartial: { partials.values.append($0) }
         )
 
         XCTAssertEqual(result, "From CLI")
         XCTAssertEqual(partials.values, ["From CLI"])
-        XCTAssertEqual(fallback.calls, 1)
+        XCTAssertEqual(backup.calls, 1)
     }
 
     func testFallsBackWhenPrimaryIsNotConfigured() async throws {
-        let fallback = StubFallback(result: .success("OK"))
+        let backup = StubBackend(result: .success("OK"))
         let service = TranslationService(
             session: stubSession(),
             config: { ServiceConfig(apiKey: "", baseURL: "https://stub.invalid/v1", model: "m") },
             retryDelays: [],
-            fallback: fallback
+            backup: backup
         )
 
         let result = try await service.perform(TransformationRequest(mode: .polish, tone: .faithful, text: "ok"))
@@ -131,12 +131,12 @@ final class ServiceFallbackTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.requestBodies.isEmpty)
     }
 
-    func testReportsBothErrorsWhenFallbackAlsoFails() async {
+    func testReportsBothErrorsWhenBackupAlsoFails() async {
         StubURLProtocol.enqueue(status: 401, body: Data(#"{"error":{"message":"bad key"}}"#.utf8))
-        let fallback = StubFallback(result: .failure(DroidFallback.DroidError.notFound))
+        let backup = StubBackend(result: .failure(DroidCLI.DroidError.notFound))
 
         do {
-            _ = try await makeService(fallback: fallback).perform(
+            _ = try await makeService(backup: backup).perform(
                 TransformationRequest(mode: .polish, tone: .faithful, text: "ok")
             )
             XCTFail("expected failure")
@@ -152,10 +152,10 @@ final class ServiceFallbackTests: XCTestCase {
             body: Data((#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Half"}}"# + "\n\n").utf8),
             failAfterBody: URLError(.networkConnectionLost)
         )
-        let fallback = StubFallback(result: .success("never"))
+        let backup = StubBackend(result: .success("never"))
 
         do {
-            _ = try await makeService(fallback: fallback).perform(
+            _ = try await makeService(backup: backup).perform(
                 TransformationRequest(mode: .polish, tone: .faithful, text: "ok"),
                 onPartial: { _ in }
             )
@@ -165,22 +165,22 @@ final class ServiceFallbackTests: XCTestCase {
                 return XCTFail("unexpected error: \(error)")
             }
         }
-        XCTAssertEqual(fallback.calls, 0)
+        XCTAssertEqual(backup.calls, 0)
     }
 
-    func testDisabledFallbackReportsPrimaryError() async {
+    func testDisabledBackupReportsPrimaryError() async {
         StubURLProtocol.enqueue(status: 401, body: Data(#"{"error":{"message":"bad key"}}"#.utf8))
-        let fallback = StubFallback(result: .success("never"), isEnabled: false)
+        let backup = StubBackend(result: .success("never"), isEnabled: false)
 
         do {
-            _ = try await makeService(fallback: fallback).perform(
+            _ = try await makeService(backup: backup).perform(
                 TransformationRequest(mode: .polish, tone: .faithful, text: "ok")
             )
             XCTFail("expected failure")
         } catch {
             XCTAssertEqual(error.localizedDescription, "API Key 无效或无权限（401）：bad key")
         }
-        XCTAssertEqual(fallback.calls, 0)
+        XCTAssertEqual(backup.calls, 0)
     }
 
     // MARK: - Helpers
@@ -191,12 +191,12 @@ final class ServiceFallbackTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
 
-    private func makeService(fallback: TextFallback) -> TranslationService {
+    private func makeService(backup: TextBackend) -> TranslationService {
         TranslationService(
             session: stubSession(),
             config: { ServiceConfig(apiKey: "test", baseURL: "https://stub.invalid/v1", model: "m") },
             retryDelays: [],
-            fallback: fallback
+            backup: backup
         )
     }
 }
@@ -206,7 +206,7 @@ private final class Recorder {
     var values: [String] = []
 }
 
-private final class StubFallback: TextFallback, @unchecked Sendable {
+private final class StubBackend: TextBackend, @unchecked Sendable {
     private let lock = NSLock()
     private let result: Result<String, Error>
     let isEnabled: Bool

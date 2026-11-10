@@ -21,14 +21,14 @@ final class SettingsModel: ObservableObject {
     @Published var historyEnabled = true
     @Published var lookupLogEnabled = true
     @Published var connection: ConnectionStatus = .idle
-    @Published var fallbackEnabled = false
-    @Published var fallbackModel = ""
-    @Published var fallbackConnection: ConnectionStatus = .idle
+    @Published var backupEnabled = false
+    @Published var backupModel = ""
+    @Published var backupConnection: ConnectionStatus = .idle
     @Published var hotkeyError: String?
     @Published var notice: String?
 
     private var connectionTask: Task<Void, Never>?
-    private var fallbackTask: Task<Void, Never>?
+    private var backupTask: Task<Void, Never>?
 
     func load() {
         apiKey = Config.apiKey
@@ -40,10 +40,10 @@ final class SettingsModel: ObservableObject {
         autoPaste = Config.autoPaste
         historyEnabled = Config.historyEnabled
         lookupLogEnabled = Config.lookupLogEnabled
-        fallbackEnabled = Config.fallbackEnabled
-        fallbackModel = Config.fallbackModel
+        backupEnabled = Config.backupEnabled
+        backupModel = Config.backupModel
         connection = .idle
-        fallbackConnection = .idle
+        backupConnection = .idle
         hotkeyError = nil
         notice = nil
     }
@@ -57,8 +57,8 @@ final class SettingsModel: ObservableObject {
         Config.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.baseUrl = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        Config.fallbackEnabled = fallbackEnabled
-        Config.fallbackModel = fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        Config.backupEnabled = backupEnabled
+        Config.backupModel = backupModel.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.favoriteTones = favoriteTones
         Config.customInstructions = customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         Config.autoPaste = autoPaste
@@ -80,7 +80,7 @@ final class SettingsModel: ObservableObject {
             baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
             model: model.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        let service = TranslationService(config: { config }, retryDelays: [], fallback: nil)
+        let service = TranslationService(config: { config }, retryDelays: [], backup: nil)
         let started = Date()
         connectionTask = Task { [weak self] in
             do {
@@ -95,26 +95,26 @@ final class SettingsModel: ObservableObject {
     }
 
     /// 直接用 droid 跑一次很短的润色，不经过主服务。
-    func testFallback() {
-        fallbackTask?.cancel()
-        let config = FallbackConfig(
+    func testBackup() {
+        backupTask?.cancel()
+        let config = BackupConfig(
             enabled: true,
-            model: fallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            model: backupModel.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        fallbackConnection = .testing
-        let fallback = DroidFallback(config: { config })
+        backupConnection = .testing
+        let backup = DroidCLI(config: { config })
         let started = Date()
-        fallbackTask = Task { [weak self] in
+        backupTask = Task { [weak self] in
             do {
                 let prompt = try TransformationPromptBuilder.make(
                     for: TransformationRequest(mode: .polish, tone: .faithful, text: "Hello.")
                 )
-                _ = try await fallback.run(prompt)
-                self?.fallbackConnection = .ok(Date().timeIntervalSince(started))
+                _ = try await backup.run(prompt)
+                self?.backupConnection = .ok(Date().timeIntervalSince(started))
             } catch is CancellationError {
                 return
             } catch {
-                self?.fallbackConnection = .failed(error.localizedDescription)
+                self?.backupConnection = .failed(error.localizedDescription)
             }
         }
     }
@@ -132,7 +132,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 serviceSection
-                fallbackSection
+                backupSection
                 hotkeySection
                 tonesSection
                 instructionsSection
@@ -176,15 +176,15 @@ struct SettingsView: View {
         }
     }
 
-    private var fallbackSection: some View {
+    private var backupSection: some View {
         Section {
-            Toggle("主服务失败时改用 Droid", isOn: $settings.fallbackEnabled)
-            if settings.fallbackEnabled {
-                TextField("模型", text: $settings.fallbackModel, prompt: Text("留空用 droid 的默认模型"))
+            Toggle("主服务失败时改用 Droid", isOn: $settings.backupEnabled)
+            if settings.backupEnabled {
+                TextField("模型", text: $settings.backupModel, prompt: Text("留空用 droid 的默认模型"))
                 HStack(spacing: 10) {
-                    Button("测试备用", action: settings.testFallback)
-                        .disabled(settings.fallbackConnection == .testing)
-                    statusLabel(settings.fallbackConnection)
+                    Button("测试备用", action: settings.testBackup)
+                        .disabled(settings.backupConnection == .testing)
+                    statusLabel(settings.backupConnection)
                 }
             }
         } header: {

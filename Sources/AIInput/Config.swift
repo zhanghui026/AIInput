@@ -21,8 +21,8 @@ enum Config {
         static let historyEnabled = "historyEnabled"
         static let lookupLogEnabled = "lookupLogEnabled"
         static let hotkey = "hotkey"
-        static let fallbackEnabled = "droidFallbackEnabled"
-        static let fallbackModel = "fallbackModel"
+        static let backupEnabled = "droidFallbackEnabled"
+        static let backupModel = "fallbackModel"
     }
 
     /// 环境变量名（仅在从终端启动时可用）。
@@ -99,19 +99,19 @@ enum Config {
     }
 
     /// 主服务失败时是否改用本机 droid。
-    static var fallbackEnabled: Bool {
-        get { defaults.bool(forKey: Keys.fallbackEnabled) }
-        set { defaults.set(newValue, forKey: Keys.fallbackEnabled) }
+    static var backupEnabled: Bool {
+        get { defaults.bool(forKey: Keys.backupEnabled) }
+        set { defaults.set(newValue, forKey: Keys.backupEnabled) }
     }
 
     /// 备用 droid 的模型；留空用 droid 自己的默认模型。
-    static var fallbackModel: String {
-        get { defaults.string(forKey: Keys.fallbackModel) ?? "" }
-        set { defaults.set(newValue, forKey: Keys.fallbackModel) }
+    static var backupModel: String {
+        get { defaults.string(forKey: Keys.backupModel) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.backupModel) }
     }
 
-    static var fallback: FallbackConfig {
-        FallbackConfig(enabled: fallbackEnabled, model: fallbackModel)
+    static var backup: BackupConfig {
+        BackupConfig(enabled: backupEnabled, model: backupModel)
     }
 
     // MARK: - 面板偏好（重启后保留）

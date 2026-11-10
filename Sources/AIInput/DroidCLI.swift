@@ -1,22 +1,22 @@
 import Foundation
 
 /// 备用配置快照：主服务失败时是否改用本机 droid，以及它用的模型（留空用默认）。
-struct FallbackConfig: Sendable, Equatable {
+struct BackupConfig: Sendable, Equatable {
     let enabled: Bool
     let model: String
 
-    static let disabled = FallbackConfig(enabled: false, model: "")
+    static let disabled = BackupConfig(enabled: false, model: "")
 }
 
-/// 主服务失败后的备用通道（生产环境是 `DroidFallback`，测试里可替换）。
-protocol TextFallback: Sendable {
+/// 主服务失败后的备用通道（生产环境是 `DroidCLI`，测试里可替换）。
+protocol TextBackend: Sendable {
     /// 当前是否启用；未启用时直接报告主服务的错误。
     var isEnabled: Bool { get }
     func run(_ prompt: TransformationPrompt) async throws -> String
 }
 
 /// 通过本机 `droid exec` 的非交互模式完成一次转换。
-struct DroidFallback: TextFallback {
+struct DroidCLI: TextBackend {
     enum DroidError: LocalizedError {
         case notFound
         case failed(Int32, String)
@@ -41,9 +41,9 @@ struct DroidFallback: TextFallback {
 /// Agent CLI 冷启动慢，比直连接口宽限得多。
     static let timeout: TimeInterval = 120
 
-    let config: @Sendable () -> FallbackConfig
+    let config: @Sendable () -> BackupConfig
 
-    init(config: @escaping @Sendable () -> FallbackConfig = { Config.fallback }) {
+    init(config: @escaping @Sendable () -> BackupConfig = { Config.backup }) {
         self.config = config
     }
 
@@ -58,7 +58,7 @@ struct DroidFallback: TextFallback {
         guard let executable = ShellEnvironment.locate("droid", in: environment) else {
             throw DroidError.notFound
         }
-        Log.flow.notice("fallback: droid model=\(config.model, privacy: .public)")
+        Log.flow.notice("backup: droid model=\(config.model, privacy: .public)")
         let started = Date()
         let result = try await ProcessRunner.run(
             executable: executable,
@@ -77,7 +77,7 @@ struct DroidFallback: TextFallback {
             throw DroidError.emptyOutput
         }
         let elapsed = Date().timeIntervalSince(started)
-        Log.flow.notice("fallback: 完成 \(elapsed, format: .fixed(precision: 1))s")
+        Log.flow.notice("backup: 完成 \(elapsed, format: .fixed(precision: 1))s")
         return output
     }
 

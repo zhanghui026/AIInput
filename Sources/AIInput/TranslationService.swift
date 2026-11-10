@@ -9,7 +9,7 @@ final class TranslationService: @unchecked Sendable {
         case decode
         case outputTruncated
         case transport(Error)
-        case fallbackFailed(primary: Error, fallback: Error)
+        case backupFailed(primary: Error, backup: Error)
 
         var errorDescription: String? {
             switch self {
@@ -35,8 +35,8 @@ final class TranslationService: @unchecked Sendable {
                 return "模型输出达到长度上限，未返回完整内容。请缩短输入后重试。"
             case .transport(let error):
                 return "网络错误：\(error.localizedDescription)"
-            case .fallbackFailed(let primary, let fallback):
-                return "\(primary.localizedDescription)\n备用也失败：\(fallback.localizedDescription)"
+            case .backupFailed(let primary, let backup):
+                return "\(primary.localizedDescription)\n备用也失败：\(backup.localizedDescription)"
             }
         }
     }
@@ -53,16 +53,16 @@ final class TranslationService: @unchecked Sendable {
     private let session: URLSession
     private let config: @Sendable () -> ServiceConfig
     private let retryDelays: [TimeInterval]
-    private let fallback: TextFallback?
+    private let backup: TextBackend?
 
     init(session: URLSession = .shared,
          config: @escaping @Sendable () -> ServiceConfig = { Config.service },
          retryDelays: [TimeInterval] = TranslationService.defaultRetryDelays,
-         fallback: TextFallback? = DroidFallback()) {
+         backup: TextBackend? = DroidCLI()) {
         self.session = session
         self.config = config
         self.retryDelays = retryDelays
-        self.fallback = fallback
+        self.backup = backup
     }
 
     /// 执行一次转换并流式返回：`onPartial` 随每个增量收到累计文本，
@@ -92,18 +92,18 @@ final class TranslationService: @unchecked Sendable {
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
             }
-            guard !shown.started, let fallback, fallback.isEnabled else {
+            guard !shown.started, let backup, backup.isEnabled else {
                 throw error
             }
             Log.flow.notice("request: 主服务失败，改用备用 droid：\(error.localizedDescription, privacy: .public)")
             let text: String
             do {
-                text = try await fallback.run(prompt)
-            } catch let fallbackError {
-                if fallbackError is CancellationError || Task.isCancelled {
+                text = try await backup.run(prompt)
+            } catch let backupError {
+                if backupError is CancellationError || Task.isCancelled {
                     throw CancellationError()
                 }
-                throw TranslationError.fallbackFailed(primary: error, fallback: fallbackError)
+                throw TranslationError.backupFailed(primary: error, backup: backupError)
             }
             try Task.checkCancellation()
             let cleaned = cleansOutput ? Self.clean(text, source: prompt.sourceText) : text
