@@ -11,6 +11,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
 }
 
 /// 最近用过（粘贴、替换或复制）的结果，只存在本机，文件仅当前用户可读。
+/// 读写和生词本、查词记录共用 `JSONFileStorage`：后台写入，读不懂的文件挪到一边留底。
 @MainActor
 final class HistoryStore: ObservableObject {
     static let limit = 20
@@ -22,16 +23,23 @@ final class HistoryStore: ObservableObject {
     }
 
     @Published private(set) var entries: [HistoryEntry] = []
-    /// nil 表示只在内存里（测试用）。
-    private let fileURL: URL?
+    private let storage: JSONFileStorage<HistoryEntry>
 
+    /// `fileURL` 为 nil 表示只在内存里（测试用）。
     init(fileURL: URL? = HistoryStore.defaultURL) {
-        self.fileURL = fileURL
-        if let fileURL,
-           let data = try? Data(contentsOf: fileURL),
-           let decoded = try? Self.decoder.decode([HistoryEntry].self, from: data) {
-            entries = Array(decoded.prefix(Self.limit))
+        storage = JSONFileStorage(url: fileURL)
+        if let legacy = Self.legacyEntries(at: fileURL) {
+            // 旧版本直接存一个数组；读进来后按现在的格式重写一遍。
+            entries = Array(legacy.prefix(Self.limit))
+            storage.save(entries)
+        } else {
+            entries = Array(storage.load().prefix(Self.limit))
         }
+    }
+
+    private static func legacyEntries(at url: URL?) -> [HistoryEntry]? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([HistoryEntry].self, from: data)
     }
 
     func record(source: String,
@@ -53,29 +61,16 @@ final class HistoryStore: ObservableObject {
         if entries.count > Self.limit {
             entries.removeLast(entries.count - Self.limit)
         }
-        save()
+        storage.save(entries)
     }
 
     func clear() {
         entries = []
-        if let fileURL {
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+        storage.remove()
     }
 
-    private func save() {
-        guard let fileURL else { return }
-        do {
-            let directory = fileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try Self.encoder.encode(entries).write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-        } catch {
-            Log.flow.error("history: 保存失败：\(error.localizedDescription, privacy: .public)")
-        }
+    /// 等待排队中的写入完成（测试用）。
+    func flush() {
+        storage.flush()
     }
-
-    // 默认日期编码是浮点秒数，能精确还原（ISO 8601 会丢掉小数秒）。
-    private static let encoder = JSONEncoder()
-    private static let decoder = JSONDecoder()
 }
