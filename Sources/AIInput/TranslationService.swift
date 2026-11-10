@@ -80,7 +80,21 @@ final class TranslationService: @unchecked Sendable {
         return try await stream(prompt, cleansOutput: false, onPartial: onPartial)
     }
 
-    /// 主服务失败（含未配置）且还没向界面输出文字时，改用备用 droid 一次性取回结果；
+    /// 主服务出的是「换个通道能解决」的问题时才值得改用备用：没配置、连不上、限流、
+    /// 服务端故障、Key 失效、响应读不懂。Base URL 写错、请求本身被拒（400/404/413…）、
+    /// 输出超长这些要让用户看到并改掉，不能被备用悄悄盖住。
+    static func canUseBackup(after error: Error) -> Bool {
+        switch error as? TranslationError {
+        case .notConfigured?, .transport?, .decode?:
+            return true
+        case .badStatus(let code, _, _)?:
+            return [401, 403, 408, 429].contains(code) || (500...599).contains(code)
+        case .invalidBaseURL?, .outputTruncated?, .backupFailed?, nil:
+            return false
+        }
+    }
+
+    /// 主服务失败且还没向界面输出文字时，改用备用 droid 一次性取回结果；
     /// 两边都失败时报告两边的原因。
     private func stream(_ prompt: TransformationPrompt,
                         cleansOutput: Bool = true,
@@ -92,7 +106,7 @@ final class TranslationService: @unchecked Sendable {
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
             }
-            guard !shown.started, let backup, backup.isEnabled else {
+            guard !shown.started, Self.canUseBackup(after: error), let backup, backup.isEnabled else {
                 throw error
             }
             Log.flow.notice("request: 主服务失败，改用备用 droid：\(error.localizedDescription, privacy: .public)")

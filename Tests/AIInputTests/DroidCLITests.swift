@@ -131,6 +131,63 @@ final class ServiceBackupTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.requestBodies.isEmpty)
     }
 
+    func testFallsBackOnServerErrors() async throws {
+        StubURLProtocol.enqueue(status: 503, body: Data())
+        let backup = StubBackend(result: .success("OK"))
+
+        let result = try await makeService(backup: backup).perform(
+            TransformationRequest(mode: .polish, tone: .faithful, text: "ok")
+        )
+
+        XCTAssertEqual(result, "OK")
+        XCTAssertEqual(backup.calls, 1)
+    }
+
+    /// 换个通道也没用、或者该让用户看到并改掉的错误，不走备用。
+    func testDoesNotFallBackOnErrorsTheUserShouldFix() async {
+        StubURLProtocol.enqueue(status: 400, body: Data(#"{"error":{"message":"bad request"}}"#.utf8))
+        let backup = StubBackend(result: .success("never"))
+
+        do {
+            _ = try await makeService(backup: backup).perform(
+                TransformationRequest(mode: .polish, tone: .faithful, text: "ok")
+            )
+            XCTFail("expected failure")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "请求失败（400）：bad request")
+        }
+        XCTAssertEqual(backup.calls, 0)
+
+        let service = TranslationService(
+            session: stubSession(),
+            config: { ServiceConfig(apiKey: "k", baseURL: "not a url", model: "m") },
+            retryDelays: [],
+            backup: backup
+        )
+        do {
+            _ = try await service.perform(TransformationRequest(mode: .polish, tone: .faithful, text: "ok"))
+            XCTFail("expected failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.hasPrefix("Base URL 无效"))
+        }
+        XCTAssertEqual(backup.calls, 0)
+    }
+
+    func testBackupEligibility() {
+        typealias E = TranslationService.TranslationError
+        XCTAssertTrue(TranslationService.canUseBackup(after: E.notConfigured))
+        XCTAssertTrue(TranslationService.canUseBackup(after: E.transport(URLError(.timedOut))))
+        XCTAssertTrue(TranslationService.canUseBackup(after: E.decode))
+        for code in [401, 403, 408, 429, 500, 503, 529] {
+            XCTAssertTrue(TranslationService.canUseBackup(after: E.badStatus(code, "", retryAfter: nil)), "\(code)")
+        }
+        for code in [400, 404, 413, 422] {
+            XCTAssertFalse(TranslationService.canUseBackup(after: E.badStatus(code, "", retryAfter: nil)), "\(code)")
+        }
+        XCTAssertFalse(TranslationService.canUseBackup(after: E.invalidBaseURL("x")))
+        XCTAssertFalse(TranslationService.canUseBackup(after: E.outputTruncated))
+    }
+
     func testReportsBothErrorsWhenBackupAlsoFails() async {
         StubURLProtocol.enqueue(status: 401, body: Data(#"{"error":{"message":"bad key"}}"#.utf8))
         let backup = StubBackend(result: .failure(DroidCLI.DroidError.notFound))
